@@ -56,26 +56,37 @@ class HexState:
         if winner is None:
             return 0
         if winner == self.player:
-            return -1
-        else:
             return 1
+        else:
+            return -1
 
-    def encode(self):
+    def encode(self, device=None, as_numpy=False):
         N = self.board_size
 
-        current = np.zeros((N, N), dtype=np.float32)
-        opponent = np.zeros((N, N), dtype=np.float32)
-        ones = np.ones((N, N), dtype=np.float32)
+        if device is None:
+            device = torch.device("cpu")
+
+        current = torch.zeros((N, N), dtype=torch.float32, device=device)
+        opponent = torch.zeros((N, N), dtype=torch.float32, device=device)
+        ones = torch.ones((N, N), dtype=torch.float32, device=device)
+
+        if self.player == Colour.RED:
+            who = torch.ones((N, N), dtype=torch.float32, device=device)
+        else:
+            who = torch.zeros((N, N), dtype=torch.float32, device=device)
 
         for x in range(N):
             for y in range(N):
                 c = self.board.tiles[x][y].colour
                 if c == self.player:
-                    current[x][y] = 1.0
+                    current[x, y] = 1.0
                 elif c is not None:
-                    opponent[x][y] = 1.0
+                    opponent[x, y] = 1.0
 
-        x = torch.tensor(np.stack([current, opponent, ones], axis=0))
+        x = torch.stack([current, opponent, ones, who], dim=0)
+
+        if as_numpy:
+            return x.cpu().numpy()
         return x
 
 class ResNetBlock(nn.Module):
@@ -96,7 +107,7 @@ class ResNetBlock(nn.Module):
 
 
 class HexResNet(nn.Module):
-    def __init__(self, board_size=11, in_channels=3, channels=64, num_blocks=8):
+    def __init__(self, board_size=11, in_channels=4, channels=32, num_blocks=4):
         super().__init__()
         self.board_size = board_size
 
@@ -185,7 +196,7 @@ class Node:
 
 
 class MCTS:
-    def __init__(self, net, sims=200, c_puct=1.2, device="cpu"):
+    def __init__(self, net, sims=200, c_puct=1.2, device="mps"):
         self.net = net
         self.sims = sims
         self.c_puct = c_puct
@@ -224,12 +235,12 @@ class MCTS:
         if node.state.is_terminal():
             return float(node.state.result())
 
-        x = node.state.encode().unsqueeze(0).to(self.device)
+        x = node.state.encode(device=self.device).unsqueeze(0)
         logits, value = self.net(x)
         logits = logits[0]
         value = value.item()
 
-        priors = torch.softmax(logits, dim=0).cpu().numpy()
+        priors = torch.softmax(logits, dim=0).detach().cpu().numpy()
 
         legal = node.state.legal_moves()
         mask = np.zeros_like(priors)
@@ -248,22 +259,18 @@ class MCTS:
 
 
 class GraveNN(AgentBase):
-    def __init__(self, colour: Colour):
+    def __init__(self, colour: Colour, load_path="gravenn_checkpoint.pt"):
         super().__init__(colour)
         self.board_size = 11
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.net = HexResNet(board_size=self.board_size).to(self.device)
+        self.device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+        self.net = HexResNet(board_size=self.board_size, in_channels=4).to(self.device)
+
+        try:
+            state_dict = torch.load(load_path, map_location=self.device)
+            self.net.load_state_dict(state_dict)
+            print(f"Loaded GraveNN weights from {load_path}")
+        except FileNotFoundError:
+            print(f"No checkpoint at {load_path}, using random weights")
+
         self.net.eval()
         self.mcts = MCTS(self.net, sims=200, device=self.device)
-
-    def make_move(self, turn: int, board: Board, opp_move: Move | None) -> Move:
-        root_state = HexState(board, self.colour)
-
-        counts = self.mcts.run(root_state)
-        N = self.board_size
-
-        best_action = int(np.argmax(counts))  
-
-        x = best_action // N
-        y = best_action % N
-        return Move(x, y)
