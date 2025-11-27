@@ -8,6 +8,8 @@ from src.Board import Board
 from src.Move import Move
 from src.Colour import Colour
 
+from agents.Group3.azalea_net import load_hex11_pretrained
+
 
 class HexState:
     def __init__(self, board: Board, player: Colour):
@@ -61,33 +63,33 @@ class HexState:
             return -1
 
     def encode(self, device=None, as_numpy=False):
-        N = self.board_size
+        """
+        Encode board for Azalea net:
+            0 = empty
+            1 = RED (X / first player)
+            2 = BLUE (O / second player)
 
+        Returns: tensor (N, N) of dtype long
+        """
+        N = self.board_size
         if device is None:
             device = torch.device("cpu")
 
-        current = torch.zeros((N, N), dtype=torch.float32, device=device)
-        opponent = torch.zeros((N, N), dtype=torch.float32, device=device)
-        ones = torch.ones((N, N), dtype=torch.float32, device=device)
-
-        if self.player == Colour.RED:
-            who = torch.ones((N, N), dtype=torch.float32, device=device)
-        else:
-            who = torch.zeros((N, N), dtype=torch.float32, device=device)
+        board_int = torch.zeros((N, N), dtype=torch.long, device=device)
 
         for x in range(N):
             for y in range(N):
                 c = self.board.tiles[x][y].colour
-                if c == self.player:
-                    current[x, y] = 1.0
-                elif c is not None:
-                    opponent[x, y] = 1.0
-
-        x = torch.stack([current, opponent, ones, who], dim=0)
+                if c == Colour.RED:
+                    board_int[x, y] = 1
+                elif c == Colour.BLUE:
+                    board_int[x, y] = 2
+                else:
+                    board_int[x, y] = 0
 
         if as_numpy:
-            return x.cpu().numpy()
-        return x
+            return board_int.cpu().numpy()
+        return board_int
 
 class ResNetBlock(nn.Module):
     def __init__(self, channels, reach=1, scale=1.0):
@@ -196,7 +198,7 @@ class Node:
 
 
 class MCTS:
-    def __init__(self, net, sims=200, c_puct=1.2, device="mps"):
+    def __init__(self, net, sims=500, c_puct=1.2, device="mps"):
         self.net = net
         self.sims = sims
         self.c_puct = c_puct
@@ -257,20 +259,59 @@ class MCTS:
 
 
 
-
 class GraveNN(AgentBase):
-    def __init__(self, colour: Colour, load_path="gravenn_checkpoint.pt"):
+    def __init__(self, colour: Colour,
+                 load_path="models/hex11-20180712-3362.policy.pth",
+                 use_azalea=True):
         super().__init__(colour)
         self.board_size = 11
-        self.device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-        self.net = HexResNet(board_size=self.board_size, in_channels=4).to(self.device)
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        try:
-            state_dict = torch.load(load_path, map_location=self.device)
-            self.net.load_state_dict(state_dict)
-            print(f"Loaded GraveNN weights from {load_path}")
-        except FileNotFoundError:
-            print(f"No checkpoint at {load_path}, using random weights")
+        if use_azalea:
+            print(f"Using Azalea pretrained Hex network from {load_path}")
+            self.net = load_hex11_pretrained(load_path, self.device, board_size=self.board_size)
+        else:
+            # fallback network
+            self.net = HexResNet(board_size=self.board_size, in_channels=4).to(self.device)
+            try:
+                state_dict = torch.load(load_path, map_location=self.device)
+                self.net.load_state_dict(state_dict)
+                print(f"Loaded GraveNN weights from {load_path}")
+            except FileNotFoundError:
+                print(f"No checkpoint at {load_path}, using random weights")
 
         self.net.eval()
-        self.mcts = MCTS(self.net, sims=200, device=self.device)
+        self.mcts = MCTS(self.net, sims= 500, device=self.device)
+
+    def make_move(self, colour: Colour, board: Board, opponent_move: Move | None) -> Move:
+        """
+        Called by Game.py as:
+            make_move(self.turn, playerBoard, opponentMove)
+
+        colour: Colour.RED or Colour.BLUE for the player to move
+        board:  the current Board instance
+        opponent_move: the last Move made by the opponent (can be None on first turn)
+        """
+        N = board.size
+
+        # Build our HexState from the current board and player to move
+        state = HexState(board, colour)
+
+        import time 
+        start_time = time.time()   
+
+
+        # Run MCTS guided by the neural net
+        counts = self.mcts.run(state)    # np.array of shape (N*N,)
+
+        end_time = time.time()
+        print(f"MCTS completed in {end_time - start_time:.2f} seconds." )
+
+        # Pick the move with the highest visit count
+        action = int(counts.argmax())
+
+        x = action // N
+        y = action % N
+
+        return Move(x, y)
+ 
