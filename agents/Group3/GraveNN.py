@@ -8,90 +8,95 @@ from src.Board import Board
 from src.Move import Move
 from src.Colour import Colour
 
+from agents.Group3.azalea_net import load_hex11_pretrained
+
 
 class HexState:
     def __init__(self, board: Board, player: Colour):
-        self.board = board
-        self.player = player
         self.board_size = board.size
+        self.board = Board(board_size=self.board_size)
+        for x in range(self.board_size):
+            for y in range(self.board_size):
+                self.board.tiles[x][y].colour = board.tiles[x][y].colour
+
+        self.player = player  
 
     def clone(self):
-        return HexState(self.board.copy(), self.player)
+        return HexState(self.board, self.player)
 
     def legal_moves(self):
         N = self.board_size
         moves = []
-
         for x in range(N):
             for y in range(N):
                 if self.board.tiles[x][y].colour is None:
                     moves.append(x * N + y)
-
-        if self.turn_number() == 2:
-            moves.append(self.swap_index())
-
         return moves
 
-    def play(self, action_index):
+    def play(self, action_index: int):
         new_state = self.clone()
-
-        if action_index == self.swap_index():
-            new_state.board.swap_colours()
-        else:
-            x = action_index // self.board_size
-            y = action_index % self.board_size
-            new_state.board.set_tile_colour(x, y, self.player)
-
+        x = action_index // self.board_size
+        y = action_index % self.board_size
+        new_state.board.set_tile_colour(x, y, self.player)
         new_state.player = Colour.RED if self.player == Colour.BLUE else Colour.BLUE
         return new_state
 
-    def swap_index(self):
-        return self.board_size * self.board_size
-
-    def turn_number(self):
-        filled = 0
-        N = self.board_size
-        for x in range(N):
-            for y in range(N):
-                if self.board.tiles[x][y].colour is not None:
-                    filled += 1
-        return filled + 1
-
     def is_terminal(self):
-        return self.board.has_ended()
+        red_win = self.board.has_ended(Colour.RED)
+        blue_win = self.board.has_ended(Colour.BLUE)
+        return red_win or blue_win
 
     def result(self):
+        """
+        Return value from the perspective of the player to move in this state.
+
+        +1 : good for the current player
+        -1 : bad for the current player
+         0 : draw / no winner (should not really occur in Hex)
+        """
         winner = self.board.get_winner()
         if winner is None:
             return 0
-        if winner == Colour.RED:
+        if winner == self.player:
             return 1
-        return -1
+        else:
+            return -1
 
-    def encode(self):
+    def encode(self, device=None, as_numpy=False):
+        """
+        Encode board for Azalea net:
+            0 = empty
+            1 = RED (X / first player)
+            2 = BLUE (O / second player)
+
+        Returns: tensor (N, N) of dtype long
+        """
         N = self.board_size
+        if device is None:
+            device = torch.device("cpu")
 
-        current = np.zeros((N, N), dtype=np.float32)
-        opponent = np.zeros((N, N), dtype=np.float32)
-        ones = np.ones((N, N), dtype=np.float32)
+        board_int = torch.zeros((N, N), dtype=torch.long, device=device)
 
         for x in range(N):
             for y in range(N):
                 c = self.board.tiles[x][y].colour
-                if c == self.player:
-                    current[x][y] = 1.0
-                elif c is not None:
-                    opponent[x][y] = 1.0
+                if c == Colour.RED:
+                    board_int[x, y] = 1
+                elif c == Colour.BLUE:
+                    board_int[x, y] = 2
+                else:
+                    board_int[x, y] = 0
 
-        x = torch.tensor(np.stack([current, opponent, ones], axis=0))
-        return x
-
-
+        if as_numpy:
+            return board_int.cpu().numpy()
+        return board_int
 
 class ResNetBlock(nn.Module):
     def __init__(self, channels, reach=1, scale=1.0):
         super().__init__()
-        self.conv = nn.Conv2d(channels, channels, kernel_size=2 * reach + 1, padding=reach, bias=False)
+        self.conv = nn.Conv2d(
+            channels, channels, kernel_size=2 * reach + 1, padding=reach, bias=False
+        )
         self.bn = nn.BatchNorm2d(channels)
         self.scale = scale
 
@@ -104,20 +109,26 @@ class ResNetBlock(nn.Module):
 
 
 class HexResNet(nn.Module):
-    def __init__(self, board_size=11, in_channels=3, channels=64, num_blocks=8):
+    def __init__(self, board_size=11, in_channels=4, channels=32, num_blocks=4):
         super().__init__()
         self.board_size = board_size
 
-        self.conv_in = nn.Conv2d(in_channels, channels, kernel_size=3, padding=1, bias=False)
+        self.conv_in = nn.Conv2d(
+            in_channels, channels, kernel_size=3, padding=1, bias=False
+        )
         self.bn_in = nn.BatchNorm2d(channels)
 
-        self.trunk = nn.Sequential(*[
-            ResNetBlock(channels, reach=1) for _ in range(num_blocks)
-        ])
+        self.trunk = nn.Sequential(
+            *[ResNetBlock(channels, reach=1) for _ in range(num_blocks)]
+        )
+
 
         self.policy_conv = nn.Conv2d(channels, 2, kernel_size=1, bias=False)
         self.policy_bn = nn.BatchNorm2d(2)
-        self.policy_fc = nn.Linear(2 * board_size * board_size, board_size * board_size + 1)
+        self.policy_fc = nn.Linear(
+            2 * board_size * board_size, board_size * board_size
+        )
+
 
         self.value_conv = nn.Conv2d(channels, 1, kernel_size=1, bias=False)
         self.value_bn = nn.BatchNorm2d(1)
@@ -141,9 +152,6 @@ class HexResNet(nn.Module):
         return policy_logits, v
 
 
-##################################################################
-# 3. MCTS
-##################################################################
 
 class Node:
     def __init__(self, state: HexState, parent, prior):
@@ -151,10 +159,10 @@ class Node:
         self.parent = parent
         self.prior = float(prior)
 
-        self.children = {}
+        self.children: dict[int, "Node"] = {}
         self.N = 0
-        self.W = 0
-        self.Q = 0
+        self.W = 0.0
+        self.Q = 0.0
 
     def expand(self, legal, priors):
         for a in legal:
@@ -190,7 +198,7 @@ class Node:
 
 
 class MCTS:
-    def __init__(self, net, sims=200, c_puct=1.2, device="cpu"):
+    def __init__(self, net, sims=500, c_puct=1.2, device="mps"):
         self.net = net
         self.sims = sims
         self.c_puct = c_puct
@@ -203,19 +211,22 @@ class MCTS:
         for _ in range(self.sims):
             node = root
 
+
             while node.children and not node.state.is_terminal():
                 _, node = node.select_child(self.c_puct)
 
+
             if node.state.is_terminal():
-                result = node.state.result()
-                node.backup(result)
+                value = float(node.state.result())
+                node.backup(value)
                 continue
+
 
             value = self.expand_and_eval(node)
             node.backup(value)
 
         N = root.state.board_size
-        counts = np.zeros(N * N + 1, dtype=np.float32)
+        counts = np.zeros(N * N, dtype=np.float32)
         for a, child in root.children.items():
             counts[a] = child.N
 
@@ -224,18 +235,18 @@ class MCTS:
     @torch.no_grad()
     def expand_and_eval(self, node: Node):
         if node.state.is_terminal():
-            return node.state.result()
+            return float(node.state.result())
 
-        x = node.state.encode().unsqueeze(0).to(self.device)
+        x = node.state.encode(device=self.device).unsqueeze(0)
         logits, value = self.net(x)
         logits = logits[0]
         value = value.item()
 
-        priors = torch.softmax(logits, dim=0).cpu().numpy()
+        priors = torch.softmax(logits, dim=0).detach().cpu().numpy()
 
         legal = node.state.legal_moves()
         mask = np.zeros_like(priors)
-        mask[legal] = 1
+        mask[legal] = 1.0
         priors = priors * mask
 
         if priors.sum() <= 0:
@@ -247,25 +258,60 @@ class MCTS:
         return value
 
 
+
 class GraveNN(AgentBase):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, colour: Colour,
+                 load_path="models/hex11-20180712-3362.policy.pth",
+                 use_azalea=True):
+        super().__init__(colour)
         self.board_size = 11
-        self.net = HexResNet(board_size=11)
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        if use_azalea:
+            print(f"Using Azalea pretrained Hex network from {load_path}")
+            self.net = load_hex11_pretrained(load_path, self.device, board_size=self.board_size)
+        else:
+            # fallback network
+            self.net = HexResNet(board_size=self.board_size, in_channels=4).to(self.device)
+            try:
+                state_dict = torch.load(load_path, map_location=self.device)
+                self.net.load_state_dict(state_dict)
+                print(f"Loaded GraveNN weights from {load_path}")
+            except FileNotFoundError:
+                print(f"No checkpoint at {load_path}, using random weights")
+
         self.net.eval()
-        self.mcts = MCTS(self.net, sims=200)
+        self.mcts = MCTS(self.net, sims= 500, device=self.device)
 
-    def get_move(self, board: Board, colour: Colour, move: Move | None):
-        root_state = HexState(board.copy(), colour)
+    def make_move(self, colour: Colour, board: Board, opponent_move: Move | None) -> Move:
+        """
+        Called by Game.py as:
+            make_move(self.turn, playerBoard, opponentMove)
 
-        counts = self.mcts.run(root_state)
-        N = self.board_size
+        colour: Colour.RED or Colour.BLUE for the player to move
+        board:  the current Board instance
+        opponent_move: the last Move made by the opponent (can be None on first turn)
+        """
+        N = board.size
 
-        best_action = int(np.argmax(counts))
+        # Build our HexState from the current board and player to move
+        state = HexState(board, colour)
 
-        if best_action == N * N:
-            return Move(-1, -1)
+        import time 
+        start_time = time.time()   
 
-        x = best_action // N
-        y = best_action % N
+
+        # Run MCTS guided by the neural net
+        counts = self.mcts.run(state)    # np.array of shape (N*N,)
+
+        end_time = time.time()
+        print(f"MCTS completed in {end_time - start_time:.2f} seconds." )
+
+        # Pick the move with the highest visit count
+        action = int(counts.argmax())
+
+        x = action // N
+        y = action % N
+
         return Move(x, y)
+ 
