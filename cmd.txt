@@ -1,0 +1,4 @@
+agents.Group3.GraveNN GraveNN
+agents.Group3.rey_agent ReyAgent
+agents.Group3.manan_agent MCTSAgent
+agents.Group3.potha_agent MCTSHexAgent
