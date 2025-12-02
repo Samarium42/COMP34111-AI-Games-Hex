@@ -1,0 +1,5 @@
+agents.TestAgents.DijkstraAgent DijkstraAgent
+agents.TestAgents.MinimaxAgent MinimaxAgent
+agents.TestAgents.PatternAgent PatternAgent
+agents.TestAgents.HexAgent HexAgent
+agents.TestAgents.Group12Agent_ultimate Group12Agent
