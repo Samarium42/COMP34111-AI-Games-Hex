@@ -97,6 +97,10 @@ class NumbaGraveNN(AgentBase):
                 logits, value_t = self.net(encoded)
                 value = float(value_t.item())
 
+                if leaf_player == 2:  # if BLUE and value is from RED's perspective
+                    value = -value
+
+
                 raw = torch.softmax(logits[0], dim=0).cpu().numpy()
 
                 # mask to legal moves
