@@ -43,7 +43,7 @@ class HexState:
 class NumbaGraveNN(AgentBase):
     def __init__(self, colour: Colour,
                  load_path="models/hex11-20180712-3362.policy.pth",
-                 sims=1500,
+                 sims=800,
                  c_puct=1.2):
 
         super().__init__(colour)
@@ -59,6 +59,42 @@ class NumbaGraveNN(AgentBase):
         # Assumes CppMCTS(board_size, sims, c_puct) or adjust as needed
         self.tree = CppMCTS(board_size=11, sims=sims)
 
+    def opening_move(self, turn, board: Board, opponent_move: Move | None):
+        N = board.size
+        centre = (N // 2, N // 2)
+        near = {
+           (centre[0] - 1, centre[1]),
+           (centre[0] + 1, centre[1]),
+           (centre[0], centre[1] - 1),
+           (centre[0], centre[1] + 1),
+           }
+
+        if turn == 1 and self.colour == Colour.RED:
+           return Move(centre[0] - 1, centre[1] - 1)  # (4,4)
+
+        if turn == 2 and self.colour == Colour.BLUE:
+           if opponent_move is None:
+               return None
+
+           ox, oy = opponent_move.x, opponent_move.y
+
+           if (ox, oy) == centre or (ox, oy) in near:
+               return Move.swap()
+           return None
+
+        return None    
+
+    @staticmethod
+    def canonicalise_board(leaf_board: np.ndarray, leaf_player: int, N: int) -> np.ndarray:
+        b = leaf_board.copy()
+        if leaf_player == 2:  # BLUE to move
+            blue_mask = (b == 2)
+            red_mask = (b == 1)
+
+            b[blue_mask] = 1
+            b[red_mask] = 2
+        return b.reshape(N, N)    
+
     @torch.no_grad()
     def make_move(self, turn, board: Board, opponent_move: Move | None):
 
@@ -71,6 +107,11 @@ class NumbaGraveNN(AgentBase):
         self.tree.reset(root_board, root_player)
 
         t0 = time.time()
+        nn_calls = 0
+        terminal_hits = 0
+        opening = self.opening_move(turn, board, opponent_move)
+        if opening is not None:
+            return opening
 
         # run MCTS in C++ with NN in Python
         for _ in range(self.sims):
@@ -80,6 +121,7 @@ class NumbaGraveNN(AgentBase):
 
             # compute priors and value
             if is_terminal == 1:
+                terminal_hits += 1
                 # terminal: uniform over legal moves as dummy prior, zero value
                 empties = np.where(leaf_board == 0)[0]
                 priors = np.zeros(N * N, dtype=np.float64)
@@ -87,19 +129,17 @@ class NumbaGraveNN(AgentBase):
                     priors[empties] = 1.0 / len(empties)
                 value = 0.0
             else:
+                nn_calls += 1
+                cannonical_board = self.canonicalise_board(leaf_board, leaf_player, N)
                 # non-terminal: call NN
                 encoded = torch.tensor(
-                    leaf_board.reshape(N, N),
+                    cannonical_board,
                     dtype=torch.long,
                     device=self.device,
                 ).unsqueeze(0)
 
                 logits, value_t = self.net(encoded)
                 value = float(value_t.item())
-
-                if leaf_player == 2:  # if BLUE and value is from RED's perspective
-                    value = -value
-
 
                 raw = torch.softmax(logits[0], dim=0).cpu().numpy()
 
@@ -125,6 +165,8 @@ class NumbaGraveNN(AgentBase):
         print(
             "[NumbaGraveNN] Move =", action,
             "took", time.time() - t0, "seconds"
+            f"(NN calls: {nn_calls}, terminal hits: {terminal_hits})"
+            "sims =", self.sims,
         )
 
         return Move(action // N, action % N)
