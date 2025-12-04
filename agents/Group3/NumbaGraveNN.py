@@ -43,7 +43,7 @@ class HexState:
 class NumbaGraveNN(AgentBase):
     def __init__(self, colour: Colour,
                  load_path="models/hex11-20180712-3362.policy.pth",
-                 sims=800,
+                 sims=2000,
                  c_puct=1.2):
 
         super().__init__(colour)
@@ -67,6 +67,8 @@ class NumbaGraveNN(AgentBase):
            (centre[0] + 1, centre[1]),
            (centre[0], centre[1] - 1),
            (centre[0], centre[1] + 1),
+           (centre[0] - 1, centre[0] - 1),
+           (centre[0] + 1, centre[0] + 1),
            }
 
         if turn == 1 and self.colour == Colour.RED:
@@ -79,21 +81,49 @@ class NumbaGraveNN(AgentBase):
            ox, oy = opponent_move.x, opponent_move.y
 
            if (ox, oy) == centre or (ox, oy) in near:
-               return Move.swap()
+               return Move(-1,-1)
            return None
 
         return None    
 
     @staticmethod
-    def canonicalise_board(leaf_board: np.ndarray, leaf_player: int, N: int) -> np.ndarray:
-        b = leaf_board.copy()
-        if leaf_player == 2:  # BLUE to move
-            blue_mask = (b == 2)
-            red_mask = (b == 1)
+    def canonicalise_board(leaf_board: np.ndarray, leaf_player: int, N: int):
+        """
+        Return:
+            canon_board: (N, N) int32 for the NN
+            idx_map: np.ndarray shape (N*N,) such that
 
-            b[blue_mask] = 1
-            b[red_mask] = 2
-        return b.reshape(N, N)    
+                raw_unmapped[idx_orig] = raw_canon[idx_map[idx_orig]]
+
+            i.e. idx_map maps ORIGINAL flat index -> CANONICAL flat index.
+        """
+        b = leaf_board.reshape(N, N).copy()
+
+        if leaf_player == 1:
+            # Red to move, connects top-bottom already.
+            # Just ensure '1' = player, '2' = opp (it already is).
+            canon = b
+            idx_map = np.arange(N * N, dtype=np.int32)
+        else:
+            # Blue to move, connects left-right.
+            # 1) swap colours so BLUE -> 1 (player), RED -> 2 (opponent)
+            swapped = b.copy()
+            blue_mask = swapped == 2
+            red_mask = swapped == 1
+            swapped[blue_mask] = 1
+            swapped[red_mask] = 2
+
+            # 2) transpose so left-right in original becomes top-bottom here
+            canon = swapped.T  # shape (N, N)
+
+            # 3) build index map: original idx -> canonical idx
+            # original idx = x*N + y  (x=row, y=col)
+            # after transpose: new_x = y, new_y = x
+            # canonical idx = new_x*N + new_y = y*N + x
+            idx_map = np.arange(N * N, dtype=np.int32).reshape(N, N).T.reshape(-1)
+
+        return canon, idx_map
+  
 
     @torch.no_grad()
     def make_move(self, turn, board: Board, opponent_move: Move | None):
@@ -130,24 +160,33 @@ class NumbaGraveNN(AgentBase):
                 value = 0.0
             else:
                 nn_calls += 1
-                cannonical_board = self.canonicalise_board(leaf_board, leaf_player, N)
-                # non-terminal: call NN
+
+                canon_board, idx_map = self.canonicalise_board(
+                    leaf_board, leaf_player, N
+                )
+
+                # non-terminal: call NN on canonical board
                 encoded = torch.tensor(
-                    cannonical_board,
+                    canon_board,
                     dtype=torch.long,
                     device=self.device,
-                ).unsqueeze(0)
+                ).unsqueeze(0)  # (1, N, N)
 
-                logits, value_t = self.net(encoded)
+                logits, value_t = self.net(encoded)  # logits: (1, N*N)
                 value = float(value_t.item())
 
-                raw = torch.softmax(logits[0], dim=0).cpu().numpy()
+                raw_canon = torch.softmax(logits[0], dim=0).cpu().numpy()  # (N*N,)
 
-                # mask to legal moves
+                # map back to original orientation
+                raw_unmapped = np.zeros_like(raw_canon)
+                # idx_map[orig_idx] = canon_idx
+                raw_unmapped[:] = raw_canon[idx_map]
+
+                # mask to legal moves on ORIGINAL board
                 priors = np.zeros(N * N, dtype=np.float64)
                 empties = np.where(leaf_board == 0)[0]
                 if len(empties) > 0:
-                    priors[empties] = raw[empties]
+                    priors[empties] = raw_unmapped[empties]
                     s = priors.sum()
                     if s > 0:
                         priors /= s
