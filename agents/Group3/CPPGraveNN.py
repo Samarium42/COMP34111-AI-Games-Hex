@@ -40,16 +40,13 @@ class HexState:
         ).unsqueeze(0)
 
 
-class NumbaGraveNN(AgentBase):
+class CPPGraveNN(AgentBase):
     def __init__(self, colour: Colour,
                  load_path="models/hex11-20180712-3362.policy.pth",
-                 sims=2000,
-                 c_puct=1.2):
+                 sims=2000):
 
         super().__init__(colour)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-        print("[NumbaGraveNN] Loading Azalea network")
         self.net = load_hex11_pretrained(load_path, self.device)
         self.net.eval()
 
@@ -202,7 +199,7 @@ class NumbaGraveNN(AgentBase):
         action = int(self.tree.best_action())
 
         print(
-            "[NumbaGraveNN] Move =", action,
+            "[CPPGraveNN] Move =", action,
             "took", time.time() - t0, "seconds"
             f"(NN calls: {nn_calls}, terminal hits: {terminal_hits})"
             "sims =", self.sims,
