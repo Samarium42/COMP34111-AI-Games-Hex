@@ -45,6 +45,7 @@ class NumbaGraveNN(AgentBase):
                  load_path="models/hex11-20180712-3362.policy.pth",
                  sims=2000,
                  c_puct=1.2):
+        self.is_learning_agent = True
 
         super().__init__(colour)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
