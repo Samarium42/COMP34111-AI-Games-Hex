@@ -35,17 +35,7 @@ class HexState:
         self.board_flat = arr
 
 
-# ======================================================================
-# Self-play NN + C++ MCTS agent
-# ======================================================================
-
 class SelfPlayGraveNN(AgentBase):
-    """
-    MCTS + neural net agent that uses ONLY the self play weights.
-
-    Use in Hex.py as:
-        -p1 "agents.Group3.SelfPlayGraveNN SelfPlayGraveNN"
-    """
 
     def __init__(
         self,
@@ -96,22 +86,6 @@ class SelfPlayGraveNN(AgentBase):
 
     @staticmethod
     def canonicalise_board(leaf_board: np.ndarray, leaf_player: int, N: int):
-        """
-        Convert a (flat) Hex board to a canonical orientation for the net.
-
-        Input:
-            leaf_board: np.ndarray shape (N*N,), 0=empty, 1=RED, 2=BLUE
-            leaf_player: 1 or 2 (player to move at this node)
-            N: board size
-
-        Returns:
-            canon_board: np.ndarray shape (N, N) int32 for the NN
-            idx_map: np.ndarray shape (N*N,), so that
-
-                raw_unmapped[orig_idx] = raw_canon[idx_map[orig_idx]]
-
-            where raw_canon are logits in canonical orientation.
-        """
         b = leaf_board.reshape(N, N).copy()
 
         if leaf_player == 1:
@@ -137,9 +111,6 @@ class SelfPlayGraveNN(AgentBase):
 
         return canon, idx_map
 
-    # ------------------------------------------------------------------
-    # Main move function with C++ MCTS + self-play net
-    # ------------------------------------------------------------------
     @torch.no_grad()
     def make_move(self, turn: int, board: Board, opponent_move: Move | None) -> Move:
         # Encode current position
