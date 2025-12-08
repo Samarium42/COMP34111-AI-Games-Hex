@@ -1,7 +1,9 @@
 agents.Group3.GraveNN GraveNN
-agents.Group3.rey_agent ReyAgent
-agents.Group3.manan_agent MCTSAgent
 agents.Group3.potha_agent MCTSHexAgent
 agents.Group3.NumbaGraveNN NumbaGraveNN
 agents.Group3.grave_agent GraveNNAgent
 agents.Group3.NewGraveNN NewGraveNN
+agents.Group3.mixed_model AzaleaGraveNN
+agents.Group3.mixed_model GraveNNSelfPlay
+agents.Group3.mixed_model AzaleaGraveNNEnsemble
+agents.Group3.SelfPlaySelfPlayGraveNN
