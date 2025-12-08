@@ -251,7 +251,7 @@ class MCTS:
             self.root = None
 
 
-class NumbaGraveNN(AgentBase):
+class NewGraveNN(AgentBase):
     """
     Optimized Hex agent using MCTS + Neural Network.
     
