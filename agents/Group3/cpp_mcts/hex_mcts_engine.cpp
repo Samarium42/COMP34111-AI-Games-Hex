@@ -16,6 +16,11 @@ struct Node {
     double value_sum;
     double Q;                    // value from this node's player's perspective
 
+    // GRAVE/AMAF stats - track value of each action as if played first
+    std::vector<int> amaf_visits;      // AMAF visit counts per action (size N*N)
+    std::vector<double> amaf_value;    // AMAF value sum per action (size N*N)
+    std::vector<double> Q_amaf;        // AMAF Q-value per action (size N*N)
+
     // children
     bool expanded;
     std::vector<Node*> children;
@@ -32,7 +37,12 @@ struct Node {
           value_sum(0.0),
           Q(0.0),
           expanded(false)
-    {}
+    {
+        // Initialize GRAVE stats
+        amaf_visits.resize(n * n, 0);
+        amaf_value.resize(n * n, 0.0);
+        Q_amaf.resize(n * n, 0.0);
+    }
 };
 
 
@@ -45,6 +55,8 @@ static Node* pending_leaf = nullptr;
 
 static int BOARD_N = 11;
 static double CP = 1.2;
+static double REF = 0.5;  // GRAVE reference parameter (bias term)
+static bool USE_GRAVE = true;  // Toggle GRAVE on/off
 
 
 // =======================================================================
@@ -156,7 +168,19 @@ int check_terminal_value(const std::vector<int>& b, int player, int N) {
 
 
 // =======================================================================
-// Selection (PUCT)
+// GRAVE: Compute beta weighting for blending Q and Q_amaf
+// Using the formula from Cazenave & Saffidine (2010):
+// beta = sqrt(k / (3*n + k))
+// where k is a constant (typically around 1000-5000)
+// =======================================================================
+
+double compute_beta(int n_visits, double k = 2000.0) {
+    return std::sqrt(k / (3.0 * n_visits + k));
+}
+
+
+// =======================================================================
+// Selection (PUCT with GRAVE)
 // =======================================================================
 
 Node* select_leaf(Node* node) {
@@ -170,13 +194,34 @@ Node* select_leaf(Node* node) {
 
         for (int i = 0; i < (int)node->children.size(); i++) {
             Node* c = node->children[i];
+            int action = node->children_actions[i];
 
             // c->Q is from c->player's perspective.
             // For selection at 'node', we want value from node->player's perspective.
-            double Q = -c->Q;
+            double Q_mc = -c->Q;
 
+            // Compute GRAVE blended Q-value
+            double Q_combined = Q_mc;
+            
+            if (USE_GRAVE && c->visits > 0) {
+                // Get AMAF statistics for this action
+                double Q_amaf_val = 0.0;
+                if (node->amaf_visits[action] > 0) {
+                    Q_amaf_val = node->Q_amaf[action];
+                }
+                
+                // Compute beta for blending
+                double beta = compute_beta(c->visits);
+                
+                // GRAVE formula: Q_grave = (1-beta)*Q_mc + beta*(Q_amaf + ref)
+                // ref is a bias term to encourage exploration
+                Q_combined = (1.0 - beta) * Q_mc + beta * (Q_amaf_val + REF);
+            }
+
+            // PUCT exploration term
             double U = CP * node->priors[i] * std::sqrt(totalN) / (1.0 + c->visits);
-            double score = Q + U;
+            double score = Q_combined + U;
+            
             if (score > best) {
                 best = score;
                 best_i = i;
@@ -224,19 +269,63 @@ void expand(Node* leaf, const double* priors) {
 
 
 // =======================================================================
-// Backup
-// value is from the leaf node's player's perspective.
-// We flip sign as we go up so each node's Q is from its own player's POV.
+// GRAVE Backup with AMAF updates
+// Collect all actions played from leaf to root and update AMAF stats
 // =======================================================================
 
 void backup(Node* leaf, double value) {
+    // Collect the sequence of actions from leaf back to root
+    std::vector<int> action_sequence;
+    std::vector<int> player_sequence;
+    
     Node* cur = leaf;
+    while (cur != nullptr && cur->parent != nullptr) {
+        action_sequence.push_back(cur->action_from_parent);
+        player_sequence.push_back(cur->parent->player);  // player who made this action
+        cur = cur->parent;
+    }
+    
+    // Reverse so we go root -> leaf
+    std::reverse(action_sequence.begin(), action_sequence.end());
+    std::reverse(player_sequence.begin(), player_sequence.end());
+
+    // Now backup from leaf to root with AMAF updates
+    cur = leaf;
     double v = value;
 
     while (cur != nullptr) {
+        // Standard MCTS update
         cur->visits++;
         cur->value_sum += v;
         cur->Q = cur->value_sum / cur->visits;
+
+        // GRAVE/AMAF update: update stats for all actions that could have been played
+        // from this node, based on whether they appeared later in the playout
+        if (USE_GRAVE && cur->parent != nullptr) {
+            // Find position in sequence where we are
+            int cur_depth = 0;
+            Node* tmp = cur;
+            while (tmp->parent != nullptr) {
+                cur_depth++;
+                tmp = tmp->parent;
+            }
+            
+            // Update AMAF for actions that appear later in sequence
+            for (size_t j = cur_depth; j < action_sequence.size(); j++) {
+                int action = action_sequence[j];
+                int action_player = player_sequence[j];
+                
+                // Only update if action was played by the same player as current node
+                if (action_player == cur->player) {
+                    cur->amaf_visits[action]++;
+                    // The value from this action's perspective
+                    // Since we track from cur's player perspective, and the action
+                    // is played by the same player, use v directly
+                    cur->amaf_value[action] += v;
+                    cur->Q_amaf[action] = cur->amaf_value[action] / cur->amaf_visits[action];
+                }
+            }
+        }
 
         v = -v;        // alternate perspective
         cur = cur->parent;
@@ -341,6 +430,19 @@ int best_action() {
         }
     }
     return bestA;
+}
+
+// New API functions to control GRAVE parameters
+void set_grave_enabled(int enabled) {
+    USE_GRAVE = (enabled != 0);
+}
+
+void set_grave_ref(double ref) {
+    REF = ref;
+}
+
+void set_c_puct(double c) {
+    CP = c;
 }
 
 } // extern "C"

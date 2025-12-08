@@ -110,6 +110,19 @@ engine.apply_eval.restype = None
 engine.best_action.argtypes = []
 engine.best_action.restype = c_int
 
+# GRAVE-specific functions
+# void set_grave_enabled(int enabled);
+engine.set_grave_enabled.argtypes = [c_int]
+engine.set_grave_enabled.restype = None
+
+# void set_grave_ref(double ref);
+engine.set_grave_ref.argtypes = [c_double]
+engine.set_grave_ref.restype = None
+
+# void set_c_puct(double c);
+engine.set_c_puct.argtypes = [c_double]
+engine.set_c_puct.restype = None
+
 
 # ============================================================
 # Python wrapper
@@ -117,7 +130,7 @@ engine.best_action.restype = c_int
 
 class CppMCTS:
     """
-    Thin wrapper around the C++ engine.
+    Thin wrapper around the C++ engine with GRAVE support.
 
     Protocol per move:
       1) reset(board_flat, player)
@@ -128,10 +141,18 @@ class CppMCTS:
       3) action = best_action()
     """
 
-    def __init__(self, board_size=11, sims=300, c_puct=1.2):
+    def __init__(self, board_size=11, sims=300, c_puct=1.2, 
+                 use_grave=True, grave_ref=0.5):
         self.N = board_size
         self.sims = sims
         self.c_puct = c_puct
+        self.use_grave = use_grave
+        self.grave_ref = grave_ref
+
+        # Set GRAVE parameters in C++ engine
+        engine.set_c_puct(c_double(c_puct))
+        engine.set_grave_enabled(c_int(1 if use_grave else 0))
+        engine.set_grave_ref(c_double(grave_ref))
 
         # persistent buffers for C calls
         self._leaf_board = np.zeros(self.N * self.N, dtype=np.int32)
@@ -192,3 +213,18 @@ class CppMCTS:
         Return the chosen action index at the root (0..N*N - 1).
         """
         return int(engine.best_action())
+
+    def set_grave_enabled(self, enabled: bool):
+        """Enable or disable GRAVE during search."""
+        self.use_grave = enabled
+        engine.set_grave_enabled(c_int(1 if enabled else 0))
+
+    def set_grave_ref(self, ref: float):
+        """Set the GRAVE reference (bias) parameter."""
+        self.grave_ref = ref
+        engine.set_grave_ref(c_double(ref))
+
+    def set_c_puct(self, c_puct: float):
+        """Set the exploration constant."""
+        self.c_puct = c_puct
+        engine.set_c_puct(c_double(c_puct))
