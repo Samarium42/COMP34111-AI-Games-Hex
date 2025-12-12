@@ -9,6 +9,8 @@ from src.Colour import Colour
 
 from agents.Group3.azalea_net import load_hex11_pretrained
 from agents.Group3.cpp_mcts.interface import CppMCTS
+from agents.Group3.little_golem_opening import LittleGolemOpening
+
 
 
 class HexState:
@@ -42,7 +44,7 @@ class HexState:
 
 class CPPGraveNN(AgentBase):
     def __init__(self, colour: Colour,
-                 load_path="models/hex11-20180712-3362.policy.pth",
+                 load_path="agents/Group3/models/hex11-20180712-3362.policy.pth",
                  sims=2000,
                  c_puct = 1.2,
                  use_grave = True,
@@ -63,32 +65,10 @@ class CPPGraveNN(AgentBase):
                             use_grave=use_grave, 
                             grave_ref=grave_ref)  
 
-    def opening_move(self, turn, board: Board, opponent_move: Move | None):
-        N = board.size
-        centre = (N // 2, N // 2)
-        near = {
-           (centre[0] - 1, centre[1]),
-           (centre[0] + 1, centre[1]),
-           (centre[0], centre[1] - 1),
-           (centre[0], centre[1] + 1),
-           (centre[0] - 1, centre[0] - 1),
-           (centre[0] + 1, centre[0] + 1),
-           }
-
-        if turn == 1 and self.colour == Colour.RED:
-           return Move(centre[0] - 1, centre[1] - 1)  # (4,4)
-
-        if turn == 2 and self.colour == Colour.BLUE:
-           if opponent_move is None:
-               return None
-
-           ox, oy = opponent_move.x, opponent_move.y
-
-           if (ox, oy) == centre or (ox, oy) in near:
-               return Move(-1,-1)
-           return None
-
-        return None    
+    def opening_move(self, turn, board: Board, opponent_move: Move | None): 
+        if not hasattr(self, "lg_opening"): 
+            self.lg_opening = LittleGolemOpening(board_size=board.size) 
+        return self.lg_opening.get_opening_move(board, self.colour, opponent_move)    
 
     @staticmethod
     def canonicalise_board(leaf_board: np.ndarray, leaf_player: int, N: int):
@@ -131,6 +111,9 @@ class CPPGraveNN(AgentBase):
 
     @torch.no_grad()
     def make_move(self, turn, board: Board, opponent_move: Move | None):
+        opening = self.opening_move(turn, board, opponent_move)
+        if opening is not None:
+            return opening
 
         state = HexState(board, self.colour)
         root_board = state.board_flat        # np.ndarray shape (N*N,)
@@ -143,9 +126,7 @@ class CPPGraveNN(AgentBase):
         t0 = time.time()
         nn_calls = 0
         terminal_hits = 0
-        opening = self.opening_move(turn, board, opponent_move)
-        if opening is not None:
-            return opening
+        
 
         # run MCTS in C++ with NN in Python
         for _ in range(self.sims):

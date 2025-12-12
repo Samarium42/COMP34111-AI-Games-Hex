@@ -41,3 +41,19 @@ python3 Hex.py -p1 "agents.Group3.NumbaGraveNN NumbaGraveNN" -v -p1Name "GraveNN
 python3 Hex.py -p1 "agents.Group3.GraveNN GraveNN" -p2 "agents.Group3.NumbaGraveNN NumbaGraveNN"
 python3 Hex.py -p1 "agents.Group3.NumbaGraveNN NumbaGraveNN" -p2 "agents.Group3.GraveNN GraveNN"
 exit 
+python3 Hex.py -p1 "agents.Group3.CPPGraveNN CPPGraveNN" -p1Name "GOAT AGENT" -p2 "agents.Group3.NewGraveNN NewGraveNN" -p2Name "shutupugly"
+g++ -versionu
+g++ -version
+g++ --version
+python3 -c "from agents.Group3.CPPGraveNN import CPPGraveNN; print('agent import ok')"
+python3 -c "from agents.Group3.little_golem_opening import LittleGolemOpening; print('import ok')"
+python3 Hex.py -p1 "agents.Group3.CPPGraveNN CPPGraveNN" -p2 "agents.DefaultAgents.NaiveAgent NaiveAgent"
+python3 Hex.py -p1 "agents.Group3.CPPGraveNN CPPGraveNN" -p2 "agents.DefaultAgents.NaiveAgent NaiveAgent"
+ls -lah models
+python3 Hex.py -p1 "agents.Group3.CPPGraveNN CPPGraveNN" -p2 "agents.DefaultAgents.NaiveAgent NaiveAgent"
+python3 Hex.py -p1 "agents.Group3.CPPGraveNN CPPGraveNN" -p1Name "Rey"  -p2 "agents.Group3.NumbaGraveNN NumbaGraveNN"
+python3 Hex.py -p1 "agents.Group3.CPPGraveNN CPPGraveNN" -p1Name "Rey"  -p2 "agents.Group3.NumbaGraveNN NumbaGraveNN"
+exit 
+python3 Hex.py -p1 "agents.Group3.CPPGraveNN CPPGraveNN" -p1Name "opponent"  -p2 "agents.Group3.CPPGraveNN CPPGraveNN" -p2Name "Rey"
+python3 Hex.py -p1 "agents.Group3.NumbaGraveNN NumbaGraveNN" -p1Name "opponent"  -p2 "agents.Group3.CPPGraveNN CPPGraveNN" -p2Name "Rey"
+exit 
