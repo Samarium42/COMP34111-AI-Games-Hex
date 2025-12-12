@@ -45,8 +45,8 @@ class HexState:
 class CPPGraveNN(AgentBase):
     def __init__(self, colour: Colour,
                  load_path="agents/Group3/models/hex11-20180712-3362.policy.pth",
-                 sims=2000,
-                 c_puct = 1.2,
+                 sims=3000,
+                 c_puct = 1.4,
                  use_grave = True,
                  grave_ref = 0.5):
 

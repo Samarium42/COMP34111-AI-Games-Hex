@@ -57,3 +57,5 @@ exit
 python3 Hex.py -p1 "agents.Group3.CPPGraveNN CPPGraveNN" -p1Name "opponent"  -p2 "agents.Group3.CPPGraveNN CPPGraveNN" -p2Name "Rey"
 python3 Hex.py -p1 "agents.Group3.NumbaGraveNN NumbaGraveNN" -p1Name "opponent"  -p2 "agents.Group3.CPPGraveNN CPPGraveNN" -p2Name "Rey"
 exit 
+python3 Hex.py -p1 "agents.Group3.NumbaGraveNN NumbaGraveNN" -p1Name "opponent"  -p2 "agents.Group3.CPPGraveNN CPPGraveNN" -p2Name "Rey"
+exit 

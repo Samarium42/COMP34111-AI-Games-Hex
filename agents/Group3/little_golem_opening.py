@@ -22,7 +22,7 @@ class LittleGolemOpening:
         board_size: int = 11,
         neutral_band: int = 14,        # consider top-N moves by weight
         neutral_skip_top: int = 2,     # skip top-K (most swap-attractive) for first move
-        swap_top_k: int = 3            # swap if opponent opening is among top-K strongest cells
+        swap_top_k: int = 5           # swap if opponent opening is among top-K strongest cells
     ):
         self.N = int(board_size)
         self.neutral_band = int(neutral_band)
