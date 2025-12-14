@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <cstdint>
 #include <random>
+#include <unordered_map>
+
 
 struct Node {
     std::vector<int> board;      // flat N*N board
@@ -102,7 +104,10 @@ static uint64_t compute_hash(const std::vector<int>& b, int N) {
     return h;
 }
 
-
+// =======================================================================
+// Terminal cache (keyed by Zobrist hash)
+// =======================================================================
+static std::unordered_map<uint64_t, uint8_t> WIN_CACHE;
 
 
 // =======================================================================
@@ -180,6 +185,36 @@ bool blue_wins(const std::vector<int>& b, int N) {
         }
     }
     return false;
+}
+
+static inline int cached_terminal_value(const Node* node) {
+    // Look up cached winner for this position
+    auto it = WIN_CACHE.find(node->hash);
+    uint8_t winner;
+
+    if (it != WIN_CACHE.end()) {
+        winner = it->second;
+    } else {
+        // Compute winner once using BFS
+        bool r  = red_wins(node->board, node->Nsize);
+        bool bl = blue_wins(node->board, node->Nsize);
+
+        if (!r && !bl) {
+            winner = 0;
+        } else if (r && !bl) {
+            winner = 1;
+        } else if (bl && !r) {
+            winner = 2;
+        } else {
+            // Should not happen in Hex
+            winner = 0;
+        }
+
+        WIN_CACHE[node->hash] = winner;
+    }
+
+    if (winner == 0) return 0;
+    return (node->player == (int)winner) ? +1 : -1;
 }
 
 
@@ -401,6 +436,8 @@ void init_root(const int* board, int N, int player) {
     root = new Node(b, player, N, nullptr, -1);
     root->hash = compute_hash(root->board, N);
     pending_leaf = nullptr;  // ensure no stale pointer between moves
+
+    if (WIN_CACHE.size() > 200000) WIN_CACHE.clear();
 }
 
 
@@ -425,8 +462,9 @@ void request_leaf(int* out_board, int* out_player, int* out_is_terminal) {
     Node* leaf = select_leaf(root);
     pending_leaf = leaf;
 
-    int term = check_terminal_value(leaf->board, leaf->player, leaf->Nsize);
+    int term = cached_terminal_value(leaf);
     *out_is_terminal = (term != 0);
+
 
     int NN = leaf->Nsize * leaf->Nsize;
     for (int i=0; i<NN; i++)
@@ -442,7 +480,8 @@ void apply_eval(const double* priors, double value) {
 
     Node* leaf = pending_leaf;
 
-    int term = check_terminal_value(leaf->board, leaf->player, leaf->Nsize);
+    int term = cached_terminal_value(leaf);
+
 
     if (term != 0) {
         // Terminal node: ignore NN priors/value, back up true outcome.
