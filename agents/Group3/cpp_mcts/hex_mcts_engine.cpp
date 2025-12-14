@@ -38,6 +38,18 @@ static inline bool bb_any(const BB128& a) {
     return (a.lo | a.hi) != 0ULL;
 }
 
+struct Node;
+
+static inline void apply_move_bb(const Node* parent, int action, int player, BB128& out_red, BB128& out_blue, BB128& out_occ) {
+    out_red = parent->red_bb;
+    out_blue = parent->blue_bb;
+
+    if (player == 1) out_red.set(action);
+    else out_blue.set(action);
+
+    out_occ = bb_or(out_red, out_blue);
+}
+
 
 struct Node {
     std::vector<int> board;      // flat N*N board
@@ -294,9 +306,12 @@ void expand(Node* leaf, const double* priors) {
     int N = leaf->Nsize;
     std::vector<int> legal;
 
-    for (int i=0; i<N*N; i++)
-        if (leaf->board[i] == 0)
+    for (int i = 0; i < N * N; i++) {
+        if (!leaf->occ_bb.test(i)) {
             legal.push_back(i);
+        }
+    }
+
 
     leaf->expanded = true;
     leaf->children_actions = legal;
@@ -314,7 +329,14 @@ void expand(Node* leaf, const double* priors) {
         nb[a] = leaf->player;
 
         int nextp = (leaf->player == 1 ? 2 : 1);
-        leaf->children[i] = new Node(nb, nextp, N, leaf, a);
+        
+        Node* child = new Node(nb, nextp, N, leaf, a);
+
+        // Set child bitboards incrementally (so we don't rely on constructor scanning)
+        apply_move_bb(leaf, a, leaf->player, child->red_bb, child->blue_bb, child->occ_bb);
+
+        leaf->children[i] = child;
+
     }
 }
 
