@@ -3,6 +3,8 @@
 #include <cmath>
 #include <cstring>
 #include <algorithm>
+#include <cstdint>
+#include <random>
 
 struct Node {
     std::vector<int> board;      // flat N*N board
@@ -10,6 +12,8 @@ struct Node {
     int Nsize;                   // board size
     Node* parent;
     int action_from_parent;      // index 0..N*N-1
+    uint64_t hash;               // Zobrist hash of this position
+
 
     // stats
     int visits;
@@ -57,6 +61,48 @@ static int BOARD_N = 11;
 static double CP = 1.2;
 static double REF = 0.5;  // GRAVE reference parameter (bias term)
 static bool USE_GRAVE = true;  // Toggle GRAVE on/off
+
+// =======================================================================
+// Zobrist hashing
+// =======================================================================
+
+static std::vector<uint64_t> ZOBRIST;  // size = N*N*3 (0 empty, 1 red, 2 blue)
+static bool ZOBRIST_INIT = false;
+
+static void init_zobrist(int N) {
+    // Re-init if board size changes or not yet initialised
+    int needed = N * N * 3;
+    if (ZOBRIST_INIT && (int)ZOBRIST.size() == needed) return;
+
+    ZOBRIST.assign(needed, 0ULL);
+
+    // Fixed seed => deterministic behaviour across runs (good for debugging)
+    std::mt19937_64 rng(0xC0FFEE123456789ULL);
+
+    for (int i = 0; i < needed; i++) {
+        ZOBRIST[i] = rng();
+    }
+
+    ZOBRIST_INIT = true;
+}
+
+// index helper: (cell idx, piece {0,1,2}) -> zobrist entry
+static inline uint64_t zob_key(int idx, int piece, int N) {
+    return ZOBRIST[(idx * 3) + piece];
+}
+
+static uint64_t compute_hash(const std::vector<int>& b, int N) {
+    uint64_t h = 0ULL;
+    for (int i = 0; i < N * N; i++) {
+        int piece = b[i]; // 0,1,2
+        if (piece != 0) {
+            h ^= zob_key(i, piece, N);
+        }
+    }
+    return h;
+}
+
+
 
 
 // =======================================================================
@@ -257,14 +303,16 @@ void expand(Node* leaf, const double* priors) {
     for (int i=0; i<L; i++)
         leaf->priors[i] = priors[legal[i]];
 
-    for (int i=0; i<L; i++) {
+    for (int i = 0; i < L; i++) {
         int a = legal[i];
         std::vector<int> nb = leaf->board;
         nb[a] = leaf->player;
-
         int nextp = (leaf->player == 1 ? 2 : 1);
-        leaf->children[i] = new Node(nb, nextp, N, leaf, a);
-    }
+        Node* child = new Node(nb, nextp, N, leaf, a);
+        child->hash = leaf->hash ^ zob_key(a, leaf->player, N);
+        leaf->children[i] = child;
+}
+
 }
 
 
@@ -345,11 +393,13 @@ void free_tree(Node* n) {
 
 void init_root(const int* board, int N, int player) {
     BOARD_N = N;
+    init_zobrist(N);
 
     std::vector<int> b(board, board + N*N);
 
     if (root) free_tree(root);
     root = new Node(b, player, N, nullptr, -1);
+    root->hash = compute_hash(root->board, N);
     pending_leaf = nullptr;  // ensure no stale pointer between moves
 }
 
