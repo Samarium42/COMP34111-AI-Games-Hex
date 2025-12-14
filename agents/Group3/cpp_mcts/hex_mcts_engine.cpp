@@ -4,6 +4,8 @@
 #include <cstring>
 #include <algorithm>
 #include <cstdint>
+#include <array>
+
 
 // =======================================================================
 // Bitboards for Hex 11x11 (121 cells) using 2x uint64_t = 128 bits
@@ -52,7 +54,6 @@ static inline void apply_move_bb(const Node* parent, int action, int player, BB1
 
 
 struct Node {
-    std::vector<int> board;      // flat N*N board
     int player;                  // player to move (1=R, 2=B)
     int Nsize;                   // board size
     Node* parent;
@@ -79,30 +80,25 @@ struct Node {
     std::vector<int> children_actions;   // action indices
     std::vector<double> priors;          // P(a|s)
 
-    Node(const std::vector<int>& b, int p, int n, Node* par, int act)
-        : board(b),
-          player(p),
-          Nsize(n),
-          parent(par),
-          action_from_parent(act),
-          visits(0),
-          value_sum(0.0),
-          Q(0.0),
-          expanded(false)
+    Node(int p, int n, Node* par, int act, const BB128& red, const BB128& blue)
+        : player(p),
+        Nsize(n),
+        parent(par),
+        action_from_parent(act),
+        red_bb(red),
+        blue_bb(blue),
+        occ_bb(bb_or(red, blue)),
+        visits(0),
+        value_sum(0.0),
+        Q(0.0),
+        expanded(false)
     {
         // Initialize GRAVE stats
         amaf_visits.resize(n * n, 0);
         amaf_value.resize(n * n, 0.0);
         Q_amaf.resize(n * n, 0.0);
-
-            // Build bitboards from flat board vector
-        for (int i = 0; i < n * n; i++) {
-            int v = board[i];
-            if (v == 1) red_bb.set(i);
-            else if (v == 2) blue_bb.set(i);
-        }
-        occ_bb = bb_or(red_bb, blue_bb);
     }
+
 
 
 
@@ -120,6 +116,36 @@ static int BOARD_N = 11;
 static double CP = 1.2;
 static double REF = 0.5;  // GRAVE reference parameter (bias term)
 static bool USE_GRAVE = true;  // Toggle GRAVE on/off
+
+
+
+static std::vector<std::array<int, 6>> NEI;
+static bool NEI_INIT = false;
+
+static void init_nei(int N) {
+    if (NEI_INIT && (int)NEI.size() == N * N) return;
+
+    NEI.assign(N * N, std::array<int, 6>{});
+    for (int i = 0; i < N * N; i++) {
+        int x = i / N;
+        int y = i % N;
+
+        // same neighbour pattern as your dx/dy
+        int nx[6] = {x-1, x-1, x,   x+1, x+1, x};
+        int ny[6] = {y,   y+1, y+1, y,   y-1, y-1};
+
+        for (int k = 0; k < 6; k++) {
+            if (nx[k] >= 0 && nx[k] < N && ny[k] >= 0 && ny[k] < N) {
+                NEI[i][k] = nx[k] * N + ny[k];
+            } else {
+                NEI[i][k] = -1;
+            }
+        }
+    }
+
+    NEI_INIT = true;
+}
+
 
 
 // =======================================================================
@@ -199,6 +225,67 @@ bool blue_wins(const std::vector<int>& b, int N) {
     return false;
 }
 
+bool red_wins_bb(const BB128& red, int N) {
+    std::queue<int> q;
+    std::vector<char> visited(N * N, 0);
+
+    // start: top row (x = 0) => idx = y
+    for (int y = 0; y < N; y++) {
+        int idx = y;
+        if (red.test(idx)) {
+            q.push(idx);
+            visited[idx] = 1;
+        }
+    }
+
+    while (!q.empty()) {
+        int idx = q.front(); q.pop();
+        int x = idx / N;
+        if (x == N - 1) return true;
+
+        for (int k = 0; k < 6; k++) {
+            int nb = NEI[idx][k];
+            if (nb < 0) continue;
+            if (!visited[nb] && red.test(nb)) {
+                visited[nb] = 1;
+                q.push(nb);
+            }
+        }
+    }
+    return false;
+}
+
+bool blue_wins_bb(const BB128& blue, int N) {
+    std::queue<int> q;
+    std::vector<char> visited(N * N, 0);
+
+    // start: left col (y = 0) => idx = x*N
+    for (int x = 0; x < N; x++) {
+        int idx = x * N;
+        if (blue.test(idx)) {
+            q.push(idx);
+            visited[idx] = 1;
+        }
+    }
+
+    while (!q.empty()) {
+        int idx = q.front(); q.pop();
+        int y = idx % N;
+        if (y == N - 1) return true;
+
+        for (int k = 0; k < 6; k++) {
+            int nb = NEI[idx][k];
+            if (nb < 0) continue;
+            if (!visited[nb] && blue.test(nb)) {
+                visited[nb] = 1;
+                q.push(nb);
+            }
+        }
+    }
+    return false;
+}
+
+
 
 // =======================================================================
 // Terminal check
@@ -228,6 +315,19 @@ int check_terminal_value(const std::vector<int>& b, int player, int N) {
 
     return (player == winner) ? +1 : -1;
 }
+
+int check_terminal_value_bb(const Node* node) {
+    int N = node->Nsize;
+
+    bool r  = red_wins_bb(node->red_bb, N);
+    bool bl = blue_wins_bb(node->blue_bb, N);
+
+    if (!r && !bl) return 0;
+
+    int winner = r ? 1 : 2;
+    return (node->player == winner) ? +1 : -1;
+}
+
 
 
 // =======================================================================
@@ -323,21 +423,20 @@ void expand(Node* leaf, const double* priors) {
     for (int i=0; i<L; i++)
         leaf->priors[i] = priors[legal[i]];
 
-    for (int i=0; i<L; i++) {
+    for (int i = 0; i < L; i++) {
         int a = legal[i];
-        std::vector<int> nb = leaf->board;
-        nb[a] = leaf->player;
+
+        BB128 r = leaf->red_bb;
+        BB128 b = leaf->blue_bb;
+        if (leaf->player == 1) r.set(a);
+        else                  b.set(a);
 
         int nextp = (leaf->player == 1 ? 2 : 1);
-        
-        Node* child = new Node(nb, nextp, N, leaf, a);
 
-        // Set child bitboards incrementally (so we don't rely on constructor scanning)
-        apply_move_bb(leaf, a, leaf->player, child->red_bb, child->blue_bb, child->occ_bb);
-
+        Node* child = new Node(nextp, N, leaf, a, r, b);
         leaf->children[i] = child;
-
     }
+
 }
 
 
@@ -418,13 +517,21 @@ void free_tree(Node* n) {
 
 void init_root(const int* board, int N, int player) {
     BOARD_N = N;
+    init_nei(N);
 
-    std::vector<int> b(board, board + N*N);
+    // Build bitboards from the incoming flat board array
+    BB128 red, blue;
+    for (int i = 0; i < N * N; i++) {
+        int v = board[i];
+        if (v == 1) red.set(i);
+        else if (v == 2) blue.set(i);
+    }
 
     if (root) free_tree(root);
-    root = new Node(b, player, N, nullptr, -1);
+    root = new Node(player, N, nullptr, -1, red, blue);
     pending_leaf = nullptr;  // ensure no stale pointer between moves
 }
+
 
 
 // =======================================================================
@@ -448,13 +555,17 @@ void request_leaf(int* out_board, int* out_player, int* out_is_terminal) {
     Node* leaf = select_leaf(root);
     pending_leaf = leaf;
 
-    int term = check_terminal_value(leaf->board, leaf->player, leaf->Nsize);
+    int term = check_terminal_value_bb(leaf);
     *out_is_terminal = (term != 0);
 
     int NN = leaf->Nsize * leaf->Nsize;
-    for (int i=0; i<NN; i++)
-        out_board[i] = leaf->board[i];
+    for (int i = 0; i < NN; i++) {
+        if (leaf->red_bb.test(i)) out_board[i] = 1;
+        else if (leaf->blue_bb.test(i)) out_board[i] = 2;
+        else out_board[i] = 0;
+    }
     *out_player = leaf->player;
+
 }
 
 
@@ -465,7 +576,7 @@ void apply_eval(const double* priors, double value) {
 
     Node* leaf = pending_leaf;
 
-    int term = check_terminal_value(leaf->board, leaf->player, leaf->Nsize);
+    int term = check_terminal_value_bb(leaf);
 
     if (term != 0) {
         // Terminal node: ignore NN priors/value, back up true outcome.
@@ -485,13 +596,10 @@ void apply_eval(const double* priors, double value) {
 int best_action() {
     if (!root) return 0;
 
-    if (!root->expanded || root->children.empty()) {
-        // no children (e.g. zero sims); pick first legal move
-        for (int i=0; i<root->Nsize*root->Nsize; i++)
-            if (root->board[i] == 0)
-                return i;
-        return 0;
+    for (int i = 0; i < root->Nsize * root->Nsize; i++) {
+        if (!root->occ_bb.test(i)) return i;
     }
+
 
     int bestA = root->children[0]->action_from_parent;
     int bestN = root->children[0]->visits;
