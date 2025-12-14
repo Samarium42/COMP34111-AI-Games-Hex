@@ -3,6 +3,41 @@
 #include <cmath>
 #include <cstring>
 #include <algorithm>
+#include <cstdint>
+
+// =======================================================================
+// Bitboards for Hex 11x11 (121 cells) using 2x uint64_t = 128 bits
+// idx = x*N + y in [0, N*N)
+// =======================================================================
+
+struct BB128 {
+    uint64_t lo = 0ULL;  // bits 0..63
+    uint64_t hi = 0ULL;  // bits 64..127 (we use up to bit 56 here for 121 cells)
+
+    inline void set(int idx) {
+        if (idx < 64) lo |= (1ULL << idx);
+        else          hi |= (1ULL << (idx - 64));
+    }
+
+    inline bool test(int idx) const {
+        if (idx < 64) return (lo >> idx) & 1ULL;
+        else          return (hi >> (idx - 64)) & 1ULL;
+    }
+
+    inline void clear(int idx) {
+        if (idx < 64) lo &= ~(1ULL << idx);
+        else          hi &= ~(1ULL << (idx - 64));
+    }
+};
+
+static inline BB128 bb_or(const BB128& a, const BB128& b) {
+    return BB128{a.lo | b.lo, a.hi | b.hi};
+}
+
+static inline bool bb_any(const BB128& a) {
+    return (a.lo | a.hi) != 0ULL;
+}
+
 
 struct Node {
     std::vector<int> board;      // flat N*N board
@@ -10,6 +45,11 @@ struct Node {
     int Nsize;                   // board size
     Node* parent;
     int action_from_parent;      // index 0..N*N-1
+
+    BB128 red_bb;
+    BB128 blue_bb;
+    BB128 occ_bb;
+
 
     // stats
     int visits;
@@ -42,7 +82,18 @@ struct Node {
         amaf_visits.resize(n * n, 0);
         amaf_value.resize(n * n, 0.0);
         Q_amaf.resize(n * n, 0.0);
+
+            // Build bitboards from flat board vector
+        for (int i = 0; i < n * n; i++) {
+            int v = board[i];
+            if (v == 1) red_bb.set(i);
+            else if (v == 2) blue_bb.set(i);
+        }
+        occ_bb = bb_or(red_bb, blue_bb);
     }
+
+
+
 };
 
 
