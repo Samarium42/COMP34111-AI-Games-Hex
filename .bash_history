@@ -59,3 +59,39 @@ python3 Hex.py -p1 "agents.Group3.NumbaGraveNN NumbaGraveNN" -p1Name "opponent" 
 exit 
 python3 Hex.py -p1 "agents.Group3.NumbaGraveNN NumbaGraveNN" -p1Name "opponent"  -p2 "agents.Group3.CPPGraveNN CPPGraveNN" -p2Name "Rey"
 exit 
+python3 Hex.py -p1 "agents.Group3.NumbaGraveNN NumbaGraveNN" -p1Name "opponent"  -p2 "agents.Group3.CPPGraveNN CPPGraveNN" -p2Name "Rey"
+python3 Hex.py -p1 "agents.Group3.NumbaGraveNN NumbaGraveNN" -p1Name "opponent"  -p2 "agents.Group3.CPPGraveNN CPPGraveNN" -p2Name "Rey"
+python3 Hex.py -p1 "agents.Group3.NumbaGraveNN NumbaGraveNN" -p1Name "opponent"  -p2 "agents.Group3.CPPGraveNN CPPGraveNN" -p2Name "Rey"
+python3 Hex.py -p1 "agents.Group3.NumbaGraveNN NumbaGraveNN" -p1Name "opponent"  -p2 "agents.Group3.CPPGraveNN CPPGraveNN" -p2Name "Rey"
+python3 Hex.py -p1 "agents.Group3.NumbaGraveNN NumbaGraveNN" -p1Name "opponent"  -p2 "agents.Group3.CPPGraveNN CPPGraveNN" -p2Name "Rey"
+python3 Hex.py -p1 "agents.Group3.NumbaGraveNN NumbaGraveNN" -p1Name "opponent"  -p2 "agents.Group3.CPPGraveNN CPPGraveNN" -p2Name "Rey"
+python3 Hex.py -p1 "agents.Group3.NumbaGraveNN NumbaGraveNN" -p1Name "opponent"  -p2 "agents.Group3.CPPGraveNN CPPGraveNN" -p2Name "Rey"
+python3 Hex.py -p1 "agents.Group3.NumbaGraveNN NumbaGraveNN" -p1Name "opponent"  -p2 "agents.Group3.CPPGraveNN CPPGraveNN" -p2Name "Rey"
+python3 Hex.py -p1 "agents.Group3.NumbaGraveNN NumbaGraveNN" -p1Name "opponent"  -p2 "agents.Group3.CPPGraveNN CPPGraveNN" -p2Name "Rey"
+python3 Hex.py -p1 "agents.Group3.SelfPlay SelfPlay" -p1Name "opponent"  -p2 "agents.Group3.CPPGraveNN CPPGraveNN" -p2Name "Rey"
+python3 Hex.py -p1 "agents.Group3.SelfPlayGraveNN SelfPlayGraveNN" -p1Name "opponent"  -p2 "agents.Group3.CPPGraveNN CPPGraveNN" -p2Name "Rey"
+python3 agents/Group3/SelfPlay.py
+cd /home/hex
+python3 agents/Group3/SelfPlay.py
+cd /home/hex
+python3 agents/Group3/SelfPlay.py
+pwd
+ls
+PYTHONPATH=/home/hex python3 /home/hex/agents/Group3/SelfPlay.py
+python3 Hex.py -p1 "agents.Group3.NumbaGraveNN NumbaGraveNN" -p1Name "opponent"  -p2 "agents.Group3.CPPGraveNN CPPGraveNN" -p2Name "Rey"
+python3 -c "from agents.Group3.SelfPlayGraveNN import SelfPlayGraveNN; print('import ok')"
+cd /home/hex
+ls agents/Group3 | grep -i selfplay
+python3 -c "from agents.Group3.SelfPlayGraveNN import SelfPlayGraveNN; print('import ok')"
+ls agents | head
+ls agents/Group3 | head
+cd /home/hex
+python3 -c "import os; print(os.getcwd())"
+python3 -c "from agents.Group3.SelfPlayGraveNN import SelfPlayGraveNN; print('import ok')"
+python3 -c "from agents.Group3.SelfPlay import SelfPlayGraveNN; print('import ok')"
+python3 agents/Group3/SelfPlay.py
+cd /home/hex
+python3 Hex.py   -p1 "agents.Group3.SelfPlay SelfPlayGraveNN"   -p2 "agents.Group3.CPPGraveNN CPPGraveNN"
+python3 Hex.py   -p1 "agents.Group3.SelfPlay SelfPlayGraveNN" -p1Name "opponent"  -p2 "agents.Group3.CPPGraveNN CPPGraveNN" -p2Name "Rey"
+python3 Hex.py   -p1 "agents.Group3.CPPGraveNN CPPGraveNN" -p1Name "Rey"  -p2 "agents.Group3.SelfPlay SelfPlayGraveNN" -p2Name "opponent"
+exit 

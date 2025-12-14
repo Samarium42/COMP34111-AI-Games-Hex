@@ -66,7 +66,7 @@ class SelfPlayGraveNN(AgentBase):
         self.sims = sims
         self.tree = CppMCTS(board_size=11, sims=sims, c_puct=c_puct)
 
-    def opening_move(self, turn: int, board: Board, opponent_move: Move | None):
+    def opening_move(self, turn: Colour, board: Board, opponent_move: Move | None):
         N = board.size
         centre = (N // 2, N // 2)
         near = {
@@ -74,8 +74,8 @@ class SelfPlayGraveNN(AgentBase):
             (centre[0] + 1, centre[1]),
             (centre[0], centre[1] - 1),
             (centre[0], centre[1] + 1),
-            (centre[0] - 1, centre[0] - 1),
-            (centre[0] + 1, centre[0] + 1),
+            (centre[0] - 1, centre[1] - 1),
+            (centre[0] + 1, centre[1] + 1),
         }
 
         # First move as Red: play near centre
@@ -143,7 +143,7 @@ class SelfPlayGraveNN(AgentBase):
     @torch.no_grad()
     def make_move(self, turn: int, board: Board, opponent_move: Move | None) -> Move:
         # Encode current position
-        state = HexState(board, self.colour)
+        state = HexState(board, turn)
         root_board = state.board_flat
         root_player = state.player
         N = state.N

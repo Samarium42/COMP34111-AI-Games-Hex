@@ -9,8 +9,6 @@ from src.Colour import Colour
 
 from agents.Group3.azalea_net import load_hex11_pretrained
 from agents.Group3.cpp_mcts.interface import CppMCTS
-from agents.Group3.little_golem_opening import LittleGolemOpening
-
 
 
 class HexState:
@@ -45,10 +43,9 @@ class HexState:
 class CPPGraveNN(AgentBase):
     def __init__(self, colour: Colour,
                  load_path="agents/Group3/models/hex11-20180712-3362.policy.pth",
-                 sims=3000,
-                 c_puct = 1.4,
-                 use_grave = True,
-                 grave_ref = 0.5):
+                 sims=2000,
+                 c_puct = 1.2,
+                 use_grave = False,):
 
         super().__init__(colour)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -62,13 +59,34 @@ class CPPGraveNN(AgentBase):
         self.tree = CppMCTS(board_size=11, 
                             sims=sims,
                             c_puct=c_puct,     
-                            use_grave=use_grave, 
-                            grave_ref=grave_ref)  
+                            use_grave=use_grave)  
 
-    def opening_move(self, turn, board: Board, opponent_move: Move | None): 
-        if not hasattr(self, "lg_opening"): 
-            self.lg_opening = LittleGolemOpening(board_size=board.size) 
-        return self.lg_opening.get_opening_move(board, self.colour, opponent_move)    
+    def opening_move(self, turn, board: Board, opponent_move: Move | None):
+        N = board.size
+        centre = (N // 2, N // 2)
+        near = {
+           (centre[0] - 1, centre[1]),
+           (centre[0] + 1, centre[1]),
+           (centre[0], centre[1] - 1),
+           (centre[0], centre[1] + 1),
+           (centre[0] - 1, centre[1] - 1),
+           (centre[0] + 1, centre[1] + 1),
+           }
+
+        if turn == 1 and self.colour == Colour.RED:
+           return Move(centre[0] - 1, centre[1] - 1)  # (4,4)
+
+        if turn == 2 and self.colour == Colour.BLUE:
+           if opponent_move is None:
+               return None
+
+           ox, oy = opponent_move.x, opponent_move.y
+
+           if (ox, oy) == centre or (ox, oy) in near:
+               return Move(-1,-1)
+           return None
+
+        return None    
 
     @staticmethod
     def canonicalise_board(leaf_board: np.ndarray, leaf_player: int, N: int):
@@ -112,8 +130,6 @@ class CPPGraveNN(AgentBase):
     @torch.no_grad()
     def make_move(self, turn, board: Board, opponent_move: Move | None):
         opening = self.opening_move(turn, board, opponent_move)
-        if opening is not None:
-            return opening
 
         state = HexState(board, self.colour)
         root_board = state.board_flat        # np.ndarray shape (N*N,)
@@ -126,7 +142,9 @@ class CPPGraveNN(AgentBase):
         t0 = time.time()
         nn_calls = 0
         terminal_hits = 0
-        
+        opening = self.opening_move(turn, board, opponent_move)
+        if opening is not None:
+            return opening
 
         # run MCTS in C++ with NN in Python
         for _ in range(self.sims):
