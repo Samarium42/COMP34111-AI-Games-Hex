@@ -53,6 +53,7 @@ def _build_hex_mcts_engine():
                 "-std=c++17",
                 "-fPIC",
                 "-shared",
+                "-pthread",
                 "hex_mcts_engine.cpp",
                 "-o",
                 "hex_mcts_engine.so",
@@ -80,14 +81,32 @@ def _load_engine():
         print(f"[CppMCTS] Initial load failed for {LIB_PATH}: {e}")
         print("[CppMCTS] Attempting in-container rebuild of hex_mcts_engine.so")
         _build_hex_mcts_engine()
-        # Second attempt
         return ctypes.cdll.LoadLibrary(LIB_PATH)
 
 
 engine = _load_engine()
 
+
 # ============================================================
-# Declare C signatures
+# Helper for optional symbol binding
+# ============================================================
+
+def _bind_optional(name, argtypes, restype):
+    """
+    Bind a symbol if it exists in the shared library.
+    Returns the bound function or None.
+    """
+    try:
+        fn = getattr(engine, name)
+    except AttributeError:
+        return None
+    fn.argtypes = argtypes
+    fn.restype = restype
+    return fn
+
+
+# ============================================================
+# Declare required C signatures
 # ============================================================
 
 # void reset_tree(int* board, int N, int player);
@@ -110,18 +129,26 @@ engine.apply_eval.restype = None
 engine.best_action.argtypes = []
 engine.best_action.restype = c_int
 
-# GRAVE-specific functions
-# void set_grave_enabled(int enabled);
-engine.set_grave_enabled.argtypes = [c_int]
-engine.set_grave_enabled.restype = None
 
-# void set_grave_ref(double ref);
-engine.set_grave_ref.argtypes = [c_double]
-engine.set_grave_ref.restype = None
+# ============================================================
+# Optional C signatures (GRAVE + batching)
+# ============================================================
 
-# void set_c_puct(double c);
-engine.set_c_puct.argtypes = [c_double]
-engine.set_c_puct.restype = None
+_set_grave_enabled = _bind_optional("set_grave_enabled", [c_int], None)
+_set_grave_ref = _bind_optional("set_grave_ref", [c_double], None)
+_set_c_puct = _bind_optional("set_c_puct", [c_double], None)
+
+_request_leaves = _bind_optional(
+    "request_leaves",
+    [c_int, POINTER(c_int), POINTER(c_int), POINTER(c_int)],
+    None,
+)
+
+_apply_evals_batch = _bind_optional(
+    "apply_evals_batch",
+    [c_int, POINTER(c_double), POINTER(c_double)],
+    None,
+)
 
 
 # ============================================================
@@ -130,59 +157,54 @@ engine.set_c_puct.restype = None
 
 class CppMCTS:
     """
-    Thin wrapper around the C++ engine with GRAVE support.
-
-    Protocol per move:
-      1) reset(board_flat, player)
-      2) For each NN evaluation:
-           leaf_board, leaf_player, is_term = request_leaf()
-           -> evaluate with NN
-           apply_eval(priors, value)
-      3) action = best_action()
+    Thin wrapper around the C++ engine with (optional) GRAVE and batching support.
     """
 
-    def __init__(self, board_size=11, sims=300, c_puct=1.2, 
-                 use_grave=True, grave_ref=0.5):
-        self.N = board_size
-        self.sims = sims
-        self.c_puct = c_puct
-        self.use_grave = use_grave
-        self.grave_ref = grave_ref
+    def __init__(
+        self,
+        board_size=11,
+        sims=300,
+        c_puct=1.2,
+        use_grave=True,
+        grave_ref=0.5,
+        batch_size=32,
+    ):
+        self.N = int(board_size)
+        self.sims = int(sims)
+        self.c_puct = float(c_puct)
+        self.use_grave = bool(use_grave)
+        self.grave_ref = float(grave_ref)
+        self.batch_size = int(batch_size)
 
-        # Set GRAVE parameters in C++ engine
-        engine.set_c_puct(c_double(c_puct))
-        engine.set_grave_enabled(c_int(1 if use_grave else 0))
-        engine.set_grave_ref(c_double(grave_ref))
+        # Set optional GRAVE parameters in C++ engine (only if symbols exist)
+        if _set_c_puct is not None:
+            _set_c_puct(c_double(self.c_puct))
+        if _set_grave_enabled is not None:
+            _set_grave_enabled(c_int(1 if self.use_grave else 0))
+        if _set_grave_ref is not None:
+            _set_grave_ref(c_double(self.grave_ref))
 
-        # persistent buffers for C calls
+        # persistent buffers for single-leaf calls
         self._leaf_board = np.zeros(self.N * self.N, dtype=np.int32)
         self._leaf_player = np.zeros(1, dtype=np.int32)
         self._leaf_term = np.zeros(1, dtype=np.int32)
 
+        # persistent buffers for batched calls
+        self._batch_boards = np.zeros((self.batch_size, self.N * self.N), dtype=np.int32)
+        self._batch_players = np.zeros(self.batch_size, dtype=np.int32)
+        self._batch_terms = np.zeros(self.batch_size, dtype=np.int32)
+
     def reset(self, board_flat: np.ndarray, player: int):
-        """
-        Initialise C++ tree at root for given board and player.
-        board_flat is a flat N*N int32 array (0 empty, 1 red, 2 blue).
-        player is 1 or 2.
-        """
         assert board_flat.size == self.N * self.N
         arr = np.ascontiguousarray(board_flat, dtype=np.int32)
 
         engine.reset_tree(
             arr.ctypes.data_as(POINTER(c_int)),
             c_int(self.N),
-            c_int(player),
+            c_int(int(player)),
         )
 
     def request_leaf(self):
-        """
-        Ask C++ engine for a leaf position to evaluate.
-
-        Returns:
-            flat_board (np.ndarray int32 shape (N*N,))
-            player_to_move (int, 1 or 2)
-            is_terminal (int, 0 or 1)
-        """
         engine.request_leaf(
             self._leaf_board.ctypes.data_as(POINTER(c_int)),
             self._leaf_player.ctypes.data_as(POINTER(c_int)),
@@ -196,35 +218,59 @@ class CppMCTS:
         )
 
     def apply_eval(self, priors: np.ndarray, value: float):
-        """
-        Feed NN priors and scalar value back into C++ at the last leaf.
-
-        priors: np.ndarray float64, shape (N*N,)
-        value: float
-        """
         pri = np.ascontiguousarray(priors, dtype=np.float64)
         engine.apply_eval(
             pri.ctypes.data_as(POINTER(c_double)),
-            c_double(value),
+            c_double(float(value)),
         )
 
     def best_action(self) -> int:
-        """
-        Return the chosen action index at the root (0..N*N - 1).
-        """
         return int(engine.best_action())
 
     def set_grave_enabled(self, enabled: bool):
-        """Enable or disable GRAVE during search."""
-        self.use_grave = enabled
-        engine.set_grave_enabled(c_int(1 if enabled else 0))
+        self.use_grave = bool(enabled)
+        if _set_grave_enabled is not None:
+            _set_grave_enabled(c_int(1 if self.use_grave else 0))
 
     def set_grave_ref(self, ref: float):
-        """Set the GRAVE reference (bias) parameter."""
-        self.grave_ref = ref
-        engine.set_grave_ref(c_double(ref))
+        self.grave_ref = float(ref)
+        if _set_grave_ref is not None:
+            _set_grave_ref(c_double(self.grave_ref))
 
     def set_c_puct(self, c_puct: float):
-        """Set the exploration constant."""
-        self.c_puct = c_puct
-        engine.set_c_puct(c_double(c_puct))
+        self.c_puct = float(c_puct)
+        if _set_c_puct is not None:
+            _set_c_puct(c_double(self.c_puct))
+
+    def request_leaves(self, B: int):
+        if _request_leaves is None:
+            raise RuntimeError("[CppMCTS] request_leaves not available. Rebuild .so with batching functions.")
+        B = int(B)
+        assert 1 <= B <= self.batch_size
+
+        _request_leaves(
+            c_int(B),
+            self._batch_boards.ctypes.data_as(POINTER(c_int)),
+            self._batch_players.ctypes.data_as(POINTER(c_int)),
+            self._batch_terms.ctypes.data_as(POINTER(c_int)),
+        )
+
+        return (
+            self._batch_boards[:B].copy(),
+            self._batch_players[:B].copy(),
+            self._batch_terms[:B].copy(),
+        )
+
+    def apply_evals_batch(self, priors_batch: np.ndarray, values_batch: np.ndarray):
+        if _apply_evals_batch is None:
+            raise RuntimeError("[CppMCTS] apply_evals_batch not available. Rebuild .so with batching functions.")
+
+        pri = np.ascontiguousarray(priors_batch, dtype=np.float64)
+        val = np.ascontiguousarray(values_batch, dtype=np.float64)
+        B = int(val.shape[0])
+
+        _apply_evals_batch(
+            c_int(B),
+            pri.ctypes.data_as(POINTER(c_double)),
+            val.ctypes.data_as(POINTER(c_double)),
+        )

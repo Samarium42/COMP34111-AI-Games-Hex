@@ -109,10 +109,6 @@ class HexNetwork(Network):
         # policy head
         self.move_fc = nn.Linear(4 * board_size * board_size,
                                  board_size * board_size)
-        nnet = sum(p.nelement() for p in self.parameters())
-        nenc = sum(p.nelement() for p in self.encoder.parameters())
-        logging.info('Net params: {}'.format(nnet - nenc))
-        logging.info('Embedding params: {}'.format(nenc))
 
     def forward(self, x, legal_moves):
         """

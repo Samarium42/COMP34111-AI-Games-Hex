@@ -24,7 +24,7 @@ sys.path.insert(0, str(project_root))
 from src.Game import Game
 from src.Player import Player
 from src.Colour import Colour
-from agents.Group3.CPPGraveNN import CPPGraveNN
+from agents.Group3.AzaleaGraveNN import CPPGraveNN
 from agents.Group3.PythonMCTSAgent import PythonMCTSAgent
 
 

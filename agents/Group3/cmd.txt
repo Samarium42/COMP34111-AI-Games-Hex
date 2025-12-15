@@ -1,9 +1,4 @@
-agents.Group3.GraveNN GraveNN
-agents.Group3.potha_agent MCTSHexAgent
-agents.Group3.CPPGraveNN CPPGraveNN
-agents.Group3.grave_agent GraveNNAgent
-agents.Group3.NewGraveNN NewGraveNN
-agents.Group3.mixed_model AzaleaGraveNN
+agents.Group3.AzaleaGraveNN AzaleaGraveNN
 agents.Group3.mixed_model GraveNNSelfPlay
 agents.Group3.mixed_model AzaleaGraveNNEnsemble
-agents.Group3.SelfPlaySelfPlayGraveNN
+agents.Group3.SelfPlayGraveNN SelfPlayGraveNN

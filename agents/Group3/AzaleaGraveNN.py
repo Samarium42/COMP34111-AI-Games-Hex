@@ -1,8 +1,6 @@
-# agents/Group3/SelfPlayGraveNN.py
-
-import time
-import numpy as np
 import torch
+import numpy as np
+import time 
 
 from src.AgentBase import AgentBase
 from src.Board import Board
@@ -17,11 +15,8 @@ class HexState:
     __slots__ = ["N", "player", "board_flat"]
 
     def __init__(self, board: Board, player: Colour):
-        """
-        board_flat: shape (N*N,), 0=empty, 1=RED, 2=BLUE
-        player: 1 if RED to move, 2 if BLUE to move
-        """
         self.N = board.size
+        # 1 = RED, 2 = BLUE (match what C++ expects)
         self.player = 1 if player == Colour.RED else 2
 
         arr = np.zeros(self.N * self.N, dtype=np.int32)
@@ -34,67 +29,88 @@ class HexState:
                     arr[x * self.N + y] = 2
         self.board_flat = arr
 
+    def encode(self, device):
+        """
+        Encode for Azalea: (1, N, N) long
+        """
+        return torch.tensor(
+            self.board_flat.reshape(self.N, self.N),
+            dtype=torch.long,
+            device=device,
+        ).unsqueeze(0)
 
-class SelfPlayGraveNN(AgentBase):
 
-    def __init__(
-        self,
-        colour: Colour,
-        load_path: str = "agents/Group3/models/selfplay_iter_10.pth",
-        sims: int = 2000,
-        c_puct: float = 1.2,
-    ):
-        self.is_learning_agent = False
+class AzaleaGraveNN(AgentBase):
+    def __init__(self, colour: Colour,
+                 load_path="agents/Group3/models/hex11-20180712-3362.policy.pth",
+                 sims=2000,
+                 c_puct = 1.2,
+                 use_grave = True,
+                 grave_ref = 0.5):
 
         super().__init__(colour)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-        print(f"[SelfPlayGraveNN] Loading self play network from {load_path}")
         self.net = load_hex11_pretrained(load_path, self.device)
         self.net.eval()
 
         self.sims = sims
-        self.tree = CppMCTS(board_size=11, sims=sims, c_puct=c_puct)
 
-    def opening_move(self, turn: int, board: Board, opponent_move: Move | None):
+        # Single C++ engine instance
+        # Assumes CppMCTS(board_size, sims, c_puct) or adjust as needed
+        self.tree = CppMCTS(board_size=11, 
+                            sims=sims,
+                            c_puct=c_puct,     
+                            use_grave=use_grave, 
+                            grave_ref=grave_ref)  
+
+    def opening_move(self, turn, board: Board, opponent_move: Move | None):
         N = board.size
         centre = (N // 2, N // 2)
         near = {
-            (centre[0] - 1, centre[1]),
-            (centre[0] + 1, centre[1]),
-            (centre[0], centre[1] - 1),
-            (centre[0], centre[1] + 1),
-            (centre[0] - 1, centre[0] - 1),
-            (centre[0] + 1, centre[0] + 1),
-        }
+           (centre[0] - 1, centre[1]),
+           (centre[0] + 1, centre[1]),
+           (centre[0], centre[1] - 1),
+           (centre[0], centre[1] + 1),
+           (centre[0] - 1, centre[0] - 1),
+           (centre[0] + 1, centre[0] + 1),
+           }
 
-        # First move as Red: play near centre
         if turn == 1 and self.colour == Colour.RED:
-            return Move(centre[0] - 1, centre[1] - 1)
+           return Move(centre[0] - 1, centre[1] - 1)  # (4,4)
 
-        # Turn 2 as Blue: decide whether to swap
         if turn == 2 and self.colour == Colour.BLUE:
-            if opponent_move is None:
-                return None
-            ox, oy = opponent_move.x, opponent_move.y
-            if (ox, oy) == centre or (ox, oy) in near:
-                # swap if they got a strong centre stone
-                return Move(-1, -1)
-            return None
+           if opponent_move is None:
+               return None
 
-        return None
+           ox, oy = opponent_move.x, opponent_move.y
+
+           if (ox, oy) == centre or (ox, oy) in near:
+               return Move(-1,-1)
+           return None
+
+        return None    
 
     @staticmethod
     def canonicalise_board(leaf_board: np.ndarray, leaf_player: int, N: int):
+        """
+        Return:
+            canon_board: (N, N) int32 for the NN
+            idx_map: np.ndarray shape (N*N,) such that
+
+                raw_unmapped[idx_orig] = raw_canon[idx_map[idx_orig]]
+
+            i.e. idx_map maps ORIGINAL flat index -> CANONICAL flat index.
+        """
         b = leaf_board.reshape(N, N).copy()
 
         if leaf_player == 1:
-            # Red to move (top-bottom). Already matches the training side.
+            # Red to move, connects top-bottom already.
+            # Just ensure '1' = player, '2' = opp (it already is).
             canon = b
             idx_map = np.arange(N * N, dtype=np.int32)
         else:
-            # Blue to move (left-right).
-            # 1) swap colours so Blue -> 1 (current player), Red -> 2 (opponent)
+            # Blue to move, connects left-right.
+            # 1) swap colours so BLUE -> 1 (player), RED -> 2 (opponent)
             swapped = b.copy()
             blue_mask = swapped == 2
             red_mask = swapped == 1
@@ -104,71 +120,73 @@ class SelfPlayGraveNN(AgentBase):
             # 2) transpose so left-right in original becomes top-bottom here
             canon = swapped.T  # shape (N, N)
 
-            # Build index map: original flat index -> canonical flat index.
-            # orig idx = x*N + y
-            # after transpose: new_x = y, new_y = x => canon idx = y*N + x
+            # 3) build index map: original idx -> canonical idx
+            # original idx = x*N + y  (x=row, y=col)
+            # after transpose: new_x = y, new_y = x
+            # canonical idx = new_x*N + new_y = y*N + x
             idx_map = np.arange(N * N, dtype=np.int32).reshape(N, N).T.reshape(-1)
 
         return canon, idx_map
+  
 
     @torch.no_grad()
-    def make_move(self, turn: int, board: Board, opponent_move: Move | None) -> Move:
-        # Encode current position
+    def make_move(self, turn, board: Board, opponent_move: Move | None):
+
         state = HexState(board, self.colour)
-        root_board = state.board_flat
-        root_player = state.player
+        root_board = state.board_flat        # np.ndarray shape (N*N,)
+        root_player = state.player           # 1 or 2
         N = state.N
 
-        # Initialise C++ tree at root
+        # initialise C++ tree at root
         self.tree.reset(root_board, root_player)
-
-        # Opening heuristic
-        opening = self.opening_move(turn, board, opponent_move)
-        if opening is not None:
-            return opening
 
         t0 = time.time()
         nn_calls = 0
         terminal_hits = 0
+        opening = self.opening_move(turn, board, opponent_move)
+        if opening is not None:
+            return opening
 
-        # MCTS loop
+        # run MCTS in C++ with NN in Python
         for _ in range(self.sims):
-            # Ask C++ engine for a leaf
+            # ask C++ engine for a leaf to evaluate
             leaf_board, leaf_player, is_terminal = self.tree.request_leaf()
             leaf_board = np.asarray(leaf_board, dtype=np.int32)
 
+            # compute priors and value
             if is_terminal == 1:
-                # Terminal node: uniform priors on legal moves, value 0
                 terminal_hits += 1
-
+                # terminal: uniform over legal moves as dummy prior, zero value
                 empties = np.where(leaf_board == 0)[0]
                 priors = np.zeros(N * N, dtype=np.float64)
                 if len(empties) > 0:
                     priors[empties] = 1.0 / len(empties)
                 value = 0.0
             else:
-                # Non terminal: evaluate with self play net
                 nn_calls += 1
 
-                canon_board, idx_map = SelfPlayGraveNN.canonicalise_board(
+                canon_board, idx_map = self.canonicalise_board(
                     leaf_board, leaf_player, N
                 )
 
+                # non-terminal: call NN on canonical board
                 encoded = torch.tensor(
                     canon_board,
                     dtype=torch.long,
                     device=self.device,
                 ).unsqueeze(0)  # (1, N, N)
 
-                logits, value_t = self.net(encoded)  # logits: (1, N*N), value_t: (1,1) or (1,)
-                value = float(value_t.view(-1)[0].item())
+                logits, value_t = self.net(encoded)  # logits: (1, N*N)
+                value = float(value_t.item())
 
                 raw_canon = torch.softmax(logits[0], dim=0).cpu().numpy()  # (N*N,)
 
-                # Map priors back to original orientation
+                # map back to original orientation
                 raw_unmapped = np.zeros_like(raw_canon)
+                # idx_map[orig_idx] = canon_idx
                 raw_unmapped[:] = raw_canon[idx_map]
 
+                # mask to legal moves on ORIGINAL board
                 priors = np.zeros(N * N, dtype=np.float64)
                 empties = np.where(leaf_board == 0)[0]
                 if len(empties) > 0:
@@ -181,21 +199,17 @@ class SelfPlayGraveNN(AgentBase):
                 else:
                     priors[:] = 1.0 / (N * N)
 
-            # Feed eval back to C++ side
+            # feed eval back to C++ side
             self.tree.apply_eval(priors, value)
 
-        # Pick best root action by visit count
+        # after all sims, ask engine for best action at root
         action = int(self.tree.best_action())
 
         print(
-            "[SelfPlayGraveNN] Move =",
-            action,
-            "took",
-            time.time() - t0,
-            "seconds",
-            f"(NN calls: {nn_calls}, terminal hits: {terminal_hits})",
-            "sims =",
-            self.sims,
+            "[CPPGraveNN] Move =", action,
+            "took", time.time() - t0, "seconds"
+            f"(NN calls: {nn_calls}, terminal hits: {terminal_hits})"
+            "sims =", self.sims,
         )
 
         return Move(action // N, action % N)
