@@ -3,32 +3,39 @@
 #include <cmath>
 #include <cstring>
 #include <algorithm>
+#include <mutex>
+#include <atomic>
+#include <thread>
+
+
 
 struct Node {
+    std::mutex mtx;
+
     std::vector<int> board;      // flat N*N board
     int player;                  // player to move (1=R, 2=B)
     int Nsize;                   // board size
     Node* parent;
     int action_from_parent;      // index 0..N*N-1
 
-    // stats
+    // stats (protected by mtx)
     int visits;
     double value_sum;
-    double Q;                    // value from this node's player's perspective
+    double Q;
 
-    // virtual loss for batched selection
+    // virtual loss (protected by mtx)
     int virtual_visits;
 
-    // GRAVE/AMAF stats
-    std::vector<int> amaf_visits;      // AMAF visit counts per action (size N*N)
-    std::vector<double> amaf_value;    // AMAF value sum per action (size N*N)
-    std::vector<double> Q_amaf;        // AMAF Q-value per action (size N*N)
+    // GRAVE/AMAF stats (protected by mtx)
+    std::vector<int> amaf_visits;
+    std::vector<double> amaf_value;
+    std::vector<double> Q_amaf;
 
-    // children
+    // children (protected by mtx)
     bool expanded;
     std::vector<Node*> children;
-    std::vector<int> children_actions;   // action indices
-    std::vector<double> priors;          // P(a|s) in same order as children_actions
+    std::vector<int> children_actions;
+    std::vector<double> priors;
 
     Node(const std::vector<int>& b, int p, int n, Node* par, int act)
         : board(b),
@@ -49,6 +56,8 @@ struct Node {
 };
 
 
+
+
 // =======================================================================
 // Global root + settings
 // =======================================================================
@@ -61,6 +70,8 @@ static int BOARD_N = 11;
 static double CP = 1.2;
 static double REF = 0.5;   // GRAVE reference bias term
 static bool USE_GRAVE = true;
+static std::atomic<int> sims_done{0};
+
 
 
 // =======================================================================
@@ -183,16 +194,20 @@ double compute_beta(int n_visits, double k = 2000.0) {
 
 static inline void add_virtual(Node* leaf, int vl = 1) {
     for (Node* n = leaf; n != nullptr; n = n->parent) {
+        std::lock_guard<std::mutex> lock(n->mtx);
         n->virtual_visits += vl;
     }
 }
 
+
 static inline void remove_virtual(Node* leaf, int vl = 1) {
     for (Node* n = leaf; n != nullptr; n = n->parent) {
+        std::lock_guard<std::mutex> lock(n->mtx);
         n->virtual_visits -= vl;
         if (n->virtual_visits < 0) n->virtual_visits = 0;
     }
 }
+
 
 
 // =======================================================================
@@ -200,7 +215,13 @@ static inline void remove_virtual(Node* leaf, int vl = 1) {
 // =======================================================================
 
 Node* select_leaf(Node* node) {
-    while (node->expanded && !node->children.empty()) {
+    while (true) {
+        std::lock_guard<std::mutex> lock(node->mtx);
+
+        if (!node->expanded || node->children.empty()) {
+            return node;
+        }
+
         double totalN = 0.0;
         for (Node* c : node->children) {
             totalN += (double)(c->visits + c->virtual_visits);
@@ -216,9 +237,7 @@ Node* select_leaf(Node* node) {
 
             int cN = c->visits + c->virtual_visits;
 
-            // convert child value (child perspective) into parent perspective
             double Q_mc = -c->Q;
-
             double Q_combined = Q_mc;
 
             if (USE_GRAVE && cN > 0) {
@@ -226,7 +245,6 @@ Node* select_leaf(Node* node) {
                 if (node->amaf_visits[action] > 0) {
                     Q_amaf_val = node->Q_amaf[action];
                 }
-
                 double beta = compute_beta(cN);
                 Q_combined = (1.0 - beta) * Q_mc + beta * (Q_amaf_val + REF);
             }
@@ -240,11 +258,57 @@ Node* select_leaf(Node* node) {
             }
         }
 
+        // Move down ONE level (no lock held after this)
         node = node->children[best_i];
     }
-
-    return node;
 }
+
+static void run_single_simulation() {
+    if (!root) return;
+
+    // 1. Selection
+    Node* leaf = select_leaf(root);
+
+    // 2. Virtual loss
+    add_virtual(leaf, 1);
+
+    // 3. Terminal check
+    int term = check_terminal_value(leaf->board, leaf->player, leaf->Nsize);
+
+    // 4. Expansion + backup
+    if (term != 0) {
+        remove_virtual(leaf, 1);
+        backup(leaf, term);
+    } else {
+        // No NN here — uniform prior fallback
+        int NN = leaf->Nsize * leaf->Nsize;
+        std::vector<double> priors(NN, 0.0);
+
+        int legal_count = 0;
+        for (int i = 0; i < NN; i++) {
+            if (leaf->board[i] == 0) legal_count++;
+        }
+        for (int i = 0; i < NN; i++) {
+            if (leaf->board[i] == 0) priors[i] = 1.0 / legal_count;
+        }
+
+        remove_virtual(leaf, 1);
+        expand(leaf, priors.data());
+        backup(leaf, 0.0);  // rollout value = 0 (draw)
+    }
+}
+
+static void worker_loop(int total_sims) {
+    while (true) {
+        int id = sims_done.fetch_add(1);
+        if (id >= total_sims) return;
+
+        run_single_simulation();
+    }
+}
+
+
+
 
 
 // =======================================================================
@@ -252,6 +316,8 @@ Node* select_leaf(Node* node) {
 // =======================================================================
 
 void expand(Node* leaf, const double* priors) {
+    std::lock_guard<std::mutex> lock(leaf->mtx);
+
     if (leaf->expanded) return;
 
     int N = leaf->Nsize;
@@ -284,6 +350,7 @@ void expand(Node* leaf, const double* priors) {
 }
 
 
+
 // =======================================================================
 // GRAVE Backup with AMAF updates
 // =======================================================================
@@ -305,27 +372,32 @@ void backup(Node* leaf, double value) {
     cur = leaf;
     double v = value;
 
-    while (cur != nullptr) {
-        cur->visits++;
-        cur->value_sum += v;
-        cur->Q = cur->value_sum / cur->visits;
+        while (cur != nullptr) {
+        {
+            std::lock_guard<std::mutex> lock(cur->mtx);
 
-        if (USE_GRAVE && cur->parent != nullptr) {
-            int cur_depth = 0;
-            Node* tmp = cur;
-            while (tmp->parent != nullptr) {
-                cur_depth++;
-                tmp = tmp->parent;
-            }
+            cur->visits++;
+            cur->value_sum += v;
+            cur->Q = cur->value_sum / cur->visits;
 
-            for (size_t j = (size_t)cur_depth; j < action_sequence.size(); j++) {
-                int action = action_sequence[j];
-                int action_player = player_sequence[j];
+            if (USE_GRAVE && cur->parent != nullptr) {
+                int cur_depth = 0;
+                Node* tmp = cur;
+                while (tmp->parent != nullptr) {
+                    cur_depth++;
+                    tmp = tmp->parent;
+                }
 
-                if (action_player == cur->player) {
-                    cur->amaf_visits[action]++;
-                    cur->amaf_value[action] += v;
-                    cur->Q_amaf[action] = cur->amaf_value[action] / cur->amaf_visits[action];
+                for (size_t j = (size_t)cur_depth; j < action_sequence.size(); j++) {
+                    int action = action_sequence[j];
+                    int action_player = player_sequence[j];
+
+                    if (action_player == cur->player) {
+                        cur->amaf_visits[action]++;
+                        cur->amaf_value[action] += v;
+                        cur->Q_amaf[action] =
+                            cur->amaf_value[action] / cur->amaf_visits[action];
+                    }
                 }
             }
         }
@@ -333,6 +405,7 @@ void backup(Node* leaf, double value) {
         v = -v;
         cur = cur->parent;
     }
+
 }
 
 
@@ -362,6 +435,31 @@ void init_root(const int* board, int N, int player) {
 // =======================================================================
 // C API
 // =======================================================================
+
+void run_simulations_mt(int total_sims, int num_threads) {
+    if (!root || total_sims <= 0 || num_threads <= 0) return;
+
+    sims_done.store(0);
+
+    if (num_threads == 1) {
+        for (int i = 0; i < total_sims; i++) {
+            run_single_simulation();
+        }
+        return;
+    }
+
+    std::vector<std::thread> threads;
+    threads.reserve(num_threads);
+
+    for (int t = 0; t < num_threads; t++) {
+        threads.emplace_back(worker_loop, total_sims);
+    }
+
+    for (auto& th : threads) {
+        th.join();
+    }
+}
+
 
 extern "C" {
 
@@ -489,4 +587,13 @@ void set_c_puct(double c) {
     CP = c;
 }
 
-} // extern "C"
+void run_mcts(int total_simulations, int num_threads) {
+    run_simulations_mt(total_simulations, num_threads);
+}
+
+
+} 
+
+
+
+// extern "C"
