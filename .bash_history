@@ -49,3 +49,6 @@ python3 Hex.py   -p1 "agents.Group3.SelfPlayGraveNN SelfPlayGraveNN"   -p1Name "
 python3 Hex.py   -p1 "agents.Group3.SelfPlayGraveNN SelfPlayGraveNN"   -p1Name "Rey"   -p2 "agents.Group3.NumbaGraveNN NumbaGraveNN" -p2Name "ReyOpps"
 python3 Hex.py   -p1 "agents.Group3.SelfPlayGraveNN SelfPlayGraveNN"   -p1Name "Rey"   -p2 "agents.Group3.NumbaGraveNN NumbaGraveNN" -p2Name "ReyOpps"
 exit 
+python3 Hex.py   -p1 "agents.Group3.SelfPlayGraveNN SelfPlayGraveNN"   -p1Name "Rey"   -p2 "agents.Group3.NumbaGraveNN NumbaGraveNN" -p2Name "ReyOpps"
+python3 Hex.py   -p1 "agents.Group3.SelfPlayGraveNN SelfPlayGraveNN"   -p1Name "Rey"   -p2 "agents.Group3.NumbaGraveNN NumbaGraveNN" -p2Name "ReyOpps"
+exit 

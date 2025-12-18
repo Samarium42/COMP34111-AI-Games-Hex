@@ -20,7 +20,7 @@ class LittleGolemOpening:
     It NEVER throws. If anything is unexpected, it returns None.
     """
 
-    def _init_(
+    def __init__(
         self,
         board_size: int = 11,
         neutral_band: int = 14,        # consider top-N moves by weight for first move
