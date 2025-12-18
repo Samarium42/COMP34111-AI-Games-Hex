@@ -42,7 +42,7 @@ class HexState:
 
 class NumbaGraveNN(AgentBase):
     def __init__(self, colour: Colour,
-                 load_path="models/hex11-20180712-3362.policy.pth",
+                 load_path="agents/Group3/models/hex11-20180712-3362.policy.pth",
                  sims=2000,
                  c_puct=1.2):
         self.is_learning_agent = True

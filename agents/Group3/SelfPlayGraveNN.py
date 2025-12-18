@@ -11,6 +11,8 @@ from src.Colour import Colour
 
 from agents.Group3.azalea_net import load_hex11_pretrained
 from agents.Group3.cpp_mcts.interface import CppMCTS
+from agents.Group3.littlegolemmoves import LittleGolemOpening
+
 
 
 class HexState:
@@ -72,29 +74,11 @@ class SelfPlayGraveNN(AgentBase):
                 pass
 
     def opening_move(self, turn: int, board: Board, opponent_move: Move | None):
-        N = board.size
-        centre = (N // 2, N // 2)
-        near = {
-            (centre[0] - 1, centre[1]),
-            (centre[0] + 1, centre[1]),
-            (centre[0], centre[1] - 1),
-            (centre[0], centre[1] + 1),
-            (centre[0] - 1, centre[1] - 1),
-            (centre[0] + 1, centre[1] + 1),
-        }
+        if not hasattr(self, "lg_opening"):
+            self.lg_opening = LittleGolemOpening(board_size=board.size)
 
-        if turn == 1 and self.colour == Colour.RED:
-            return Move(centre[0] - 1, centre[1] - 1)
+        return self.lg_opening.get_opening_move(board, self.colour, opponent_move)
 
-        if turn == 2 and self.colour == Colour.BLUE:
-            if opponent_move is None:
-                return None
-            ox, oy = opponent_move.x, opponent_move.y
-            if (ox, oy) == centre or (ox, oy) in near:
-                return Move(-1, -1)
-            return None
-
-        return None
 
     @staticmethod
     def _uniform_priors(leaf_board: np.ndarray, N: int) -> np.ndarray:
@@ -137,9 +121,14 @@ class SelfPlayGraveNN(AgentBase):
 
         idx_map = np.arange(N * N, dtype=np.int32).reshape(N, N).T.reshape(-1)
         return canon, idx_map
+    
+
 
     @torch.no_grad()
     def make_move(self, turn: int, board: Board, opponent_move: Move | None) -> Move:
+        opening = self.opening_move(turn, board, opponent_move)
+        if opening is not None:
+            return opening
         state = HexState(board, self.colour)
         root_board = state.board_flat
         root_player = state.player
