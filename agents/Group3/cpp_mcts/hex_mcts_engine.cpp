@@ -5,30 +5,29 @@
 #include <algorithm>
 
 struct Node {
-    std::vector<int> board;      // flat N*N board
-    int player;                  // player to move (1=R, 2=B)
-    int Nsize;                   // board size
+    std::vector<int> board;      
+    int player;                  
+    int Nsize;                   
     Node* parent;
-    int action_from_parent;      // index 0..N*N-1
+    int action_from_parent;     
 
-    // stats
+
     int visits;
     double value_sum;
-    double Q;                    // value from this node's player's perspective
+    double Q;                    
 
-    // virtual loss for batched selection
     int virtual_visits;
 
-    // GRAVE/AMAF stats
-    std::vector<int> amaf_visits;      // AMAF visit counts per action (size N*N)
-    std::vector<double> amaf_value;    // AMAF value sum per action (size N*N)
-    std::vector<double> Q_amaf;        // AMAF Q-value per action (size N*N)
 
-    // children
+    std::vector<int> amaf_visits;      
+    std::vector<double> amaf_value;    
+    std::vector<double> Q_amaf;        
+
+
     bool expanded;
     std::vector<Node*> children;
-    std::vector<int> children_actions;   // action indices
-    std::vector<double> priors;          // P(a|s) in same order as children_actions
+    std::vector<int> children_actions;   
+    std::vector<double> priors;          
 
     Node(const std::vector<int>& b, int p, int n, Node* par, int act)
         : board(b),
@@ -49,9 +48,6 @@ struct Node {
 };
 
 
-// =======================================================================
-// Global root + settings
-// =======================================================================
 
 static Node* root = nullptr;
 static Node* pending_leaf = nullptr;
@@ -59,20 +55,15 @@ static std::vector<Node*> pending_leaves;
 
 static int BOARD_N = 11;
 static double CP = 1.2;
-static double REF = 0.5;   // GRAVE reference bias term
+static double REF = 0.5;   
 static bool USE_GRAVE = true;
 
-
-// =======================================================================
-// Hex win-checking utilities
-// =======================================================================
 
 static inline bool inside_xy(int x, int y, int N) {
     return x >= 0 && x < N && y >= 0 && y < N;
 }
 
 bool red_wins(const std::vector<int>& b, int N) {
-    // RED = 1 connects top to bottom (row 0 to row N-1)
     std::queue<int> q;
     std::vector<char> visited(N * N, 0);
 
@@ -108,7 +99,6 @@ bool red_wins(const std::vector<int>& b, int N) {
 }
 
 bool blue_wins(const std::vector<int>& b, int N) {
-    // BLUE = 2 connects left to right (col 0 to col N-1)
     std::queue<int> q;
     std::vector<char> visited(N * N, 0);
 
@@ -144,14 +134,6 @@ bool blue_wins(const std::vector<int>& b, int N) {
     return false;
 }
 
-
-// =======================================================================
-// Terminal check
-// return:  +1 if 'player' (to move at this node) is the winner on this board
-//          -1 if 'player' is the loser
-//           0 if non-terminal
-// =======================================================================
-
 int check_terminal_value(const std::vector<int>& b, int player, int N) {
     bool r = red_wins(b, N);
     bool bl = blue_wins(b, N);
@@ -161,25 +143,19 @@ int check_terminal_value(const std::vector<int>& b, int player, int N) {
     int winner = 0;
     if (r && !bl) winner = 1;
     else if (bl && !r) winner = 2;
-    else return 0; // should not happen in Hex
+    else return 0; 
 
     return (player == winner) ? +1 : -1;
 }
 
 
-// =======================================================================
-// GRAVE beta
-// beta = sqrt(k / (3*n + k))
-// =======================================================================
+
 
 double compute_beta(int n_visits, double k = 2000.0) {
     return std::sqrt(k / (3.0 * n_visits + k));
 }
 
 
-// =======================================================================
-// Virtual loss helpers
-// =======================================================================
 
 static inline void add_virtual(Node* leaf, int vl = 1) {
     for (Node* n = leaf; n != nullptr; n = n->parent) {
@@ -195,9 +171,6 @@ static inline void remove_virtual(Node* leaf, int vl = 1) {
 }
 
 
-// =======================================================================
-// Selection (PUCT with GRAVE, using visits + virtual_visits)
-// =======================================================================
 
 Node* select_leaf(Node* node) {
     while (node->expanded && !node->children.empty()) {
@@ -216,7 +189,6 @@ Node* select_leaf(Node* node) {
 
             int cN = c->visits + c->virtual_visits;
 
-            // convert child value (child perspective) into parent perspective
             double Q_mc = -c->Q;
 
             double Q_combined = Q_mc;
@@ -246,10 +218,6 @@ Node* select_leaf(Node* node) {
     return node;
 }
 
-
-// =======================================================================
-// Expansion
-// =======================================================================
 
 void expand(Node* leaf, const double* priors) {
     if (leaf->expanded) return;
@@ -283,10 +251,6 @@ void expand(Node* leaf, const double* priors) {
     }
 }
 
-
-// =======================================================================
-// GRAVE Backup with AMAF updates
-// =======================================================================
 
 void backup(Node* leaf, double value) {
     std::vector<int> action_sequence;
@@ -336,9 +300,6 @@ void backup(Node* leaf, double value) {
 }
 
 
-// =======================================================================
-// Root handling
-// =======================================================================
 
 void free_tree(Node* n) {
     if (!n) return;
@@ -359,9 +320,6 @@ void init_root(const int* board, int N, int player) {
 }
 
 
-// =======================================================================
-// C API
-// =======================================================================
 
 extern "C" {
 
@@ -378,7 +336,6 @@ void request_leaves(int batch_size, int* out_boards, int* out_players, int* out_
         Node* leaf = select_leaf(root);
         pending_leaves[i] = leaf;
 
-        // virtual loss so the next selection in this batch does not pick the same path
         add_virtual(leaf, 1);
 
         int term = check_terminal_value(leaf->board, leaf->player, leaf->Nsize);
@@ -400,7 +357,6 @@ void apply_evals_batch(int batch_size, const double* priors_batch, const double*
         Node* leaf = pending_leaves[i];
         if (!leaf) continue;
 
-        // remove virtual loss now that we are applying the real update
         remove_virtual(leaf, 1);
 
         int term = check_terminal_value(leaf->board, leaf->player, leaf->Nsize);

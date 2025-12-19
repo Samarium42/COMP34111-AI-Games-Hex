@@ -1,4 +1,1 @@
-agents.Group3.AzaleaGraveNN AzaleaGraveNN
-agents.Group3.mixed_model GraveNNSelfPlay
-agents.Group3.mixed_model AzaleaGraveNNEnsemble
 agents.Group3.SelfPlayGraveNN SelfPlayGraveNN
